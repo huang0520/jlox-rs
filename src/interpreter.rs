@@ -1,7 +1,10 @@
+use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::string::FromUtf8Error;
+
+use crate::scanner::ScanError;
 
 pub struct Lox {}
 
@@ -68,11 +71,7 @@ impl Lox {
     }
 
     fn run(&self, source: &str) -> Result<(), RunError> {
-        Err(RunError {
-            line: 0,
-            loc: 0,
-            kind: RunErrorKind::NoComma,
-        })
+        todo!()
     }
 }
 
@@ -131,17 +130,16 @@ pub enum RunPromptErrorKind {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("error: {line}:{loc}")]
+#[error("error: {line}: {kind}")]
 #[non_exhaustive]
 pub struct RunError {
     pub line: usize,
-    pub loc: usize,
     #[source]
     pub kind: RunErrorKind,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunErrorKind {
-    #[error("no comma")]
-    NoComma,
+    #[error(transparent)]
+    ScanError(#[from] ScanError),
 }

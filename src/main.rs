@@ -1,4 +1,7 @@
 mod interpreter;
+mod scanner;
+mod token;
+mod token_type;
 
 use std::env;
 use std::process::{ExitCode, Termination};
