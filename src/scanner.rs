@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use crate::token::Token;
 use crate::token_type::{Literal, TokenType};
 
@@ -17,7 +15,6 @@ pub enum State {
 pub enum Transition {
     Advance, // Increase Current but keep Start
     Skip,    // Increase Current and Start
-    Stall,   // Keep Current and Start
     Emit(Token),
     Error(ScanError),
 }
@@ -56,7 +53,6 @@ impl Scanner {
                     self.state = State::Start;
                 }
                 Transition::Advance => {}
-                Transition::Stall => self.current -= 1,
                 Transition::Skip => {
                     self.start = self.current;
                     self.state = State::Start;
@@ -69,12 +65,7 @@ impl Scanner {
             };
         }
 
-        tokens.push(Token::new(
-            TokenType::Eof,
-            "".into(),
-            Literal::Nil,
-            self.line,
-        ));
+        tokens.push(Token::new_eof(self.line));
 
         if !errors.is_empty() {
             Err(errors)
@@ -99,16 +90,9 @@ impl Scanner {
     fn start(&mut self, c: char) -> Transition {
         match c {
             // Single-char token
-            '(' => Transition::Emit(self.make_token(TokenType::LeftParen)),
-            ')' => Transition::Emit(self.make_token(TokenType::RightParen)),
-            '{' => Transition::Emit(self.make_token(TokenType::LeftBrace)),
-            '}' => Transition::Emit(self.make_token(TokenType::RightBrace)),
-            ',' => Transition::Emit(self.make_token(TokenType::Comma)),
-            '.' => Transition::Emit(self.make_token(TokenType::Dot)),
-            '-' => Transition::Emit(self.make_token(TokenType::Minus)),
-            '+' => Transition::Emit(self.make_token(TokenType::Plus)),
-            ';' => Transition::Emit(self.make_token(TokenType::Semicolon)),
-            '*' => Transition::Emit(self.make_token(TokenType::Star)),
+            '(' | ')' | '{' | '}' | ',' | '.' | '-' | '+' | ';' | '*' => Transition::Emit(
+                Token::new_simple(self.check_single_lexeme(&c), c, self.line),
+            ),
 
             // Double-char token
             '!' => self.emit_if_next('=', TokenType::BangEqual, TokenType::Bang),
@@ -124,7 +108,7 @@ impl Scanner {
                     self.advance();
                     Transition::Advance
                 } else {
-                    Transition::Emit(self.make_token(TokenType::Slash))
+                    Transition::Emit(Token::new_simple(TokenType::Slash, '/', self.line))
                 }
             }
 
@@ -149,7 +133,7 @@ impl Scanner {
                     self.state = State::Decimal;
                     Transition::Advance
                 }
-                _ => Transition::Emit(self.make_token(TokenType::Number)),
+                _ => Transition::Emit(self.make_number_token()),
             },
             'a'..='z' | 'A'..='Z' | '_' => {
                 if self
@@ -159,7 +143,7 @@ impl Scanner {
                     self.state = State::Identifier;
                     Transition::Advance
                 } else {
-                    Transition::Emit(self.make_token(self.check_keyword(&self.current_lexeme())))
+                    Transition::Emit(self.make_keyword_token())
                 }
             }
 
@@ -199,7 +183,7 @@ impl Scanner {
         match self.peek() {
             Some('"') => {
                 self.advance();
-                Transition::Emit(self.make_token(TokenType::String))
+                Transition::Emit(self.make_string_token())
             }
             Some('\n') => {
                 self.line += 1;
@@ -218,16 +202,16 @@ impl Scanner {
                     self.state = State::Decimal;
                     Transition::Advance
                 }
-                _ => Transition::Emit(self.make_token(TokenType::Number)),
+                _ => Transition::Emit(self.make_number_token()),
             },
-            _ => Transition::Emit(self.make_token(TokenType::Number)),
+            _ => Transition::Emit(self.make_number_token()),
         }
     }
 
     fn decimal(&self) -> Transition {
         match self.peek() {
             Some('0'..='9') => Transition::Advance,
-            _ => Transition::Emit(self.make_token(TokenType::Number)),
+            _ => Transition::Emit(self.make_number_token()),
         }
     }
 
@@ -238,7 +222,7 @@ impl Scanner {
         {
             Transition::Advance
         } else {
-            Transition::Emit(self.make_token(self.check_keyword(&self.current_lexeme())))
+            Transition::Emit(self.make_keyword_token())
         }
     }
 
@@ -262,26 +246,60 @@ impl Scanner {
         then_type: TokenType,
         else_type: TokenType,
     ) -> Transition {
-        if self.peek() == Some(expected) {
+        let token_type = if self.peek() == Some(expected) {
             self.advance();
-            Transition::Emit(self.make_token(then_type))
+            then_type
         } else {
-            Transition::Emit(self.make_token(else_type))
-        }
+            else_type
+        };
+        Transition::Emit(Token::new_simple(
+            token_type,
+            self.current_lexeme(),
+            self.line,
+        ))
     }
 
     fn current_lexeme(&self) -> String {
         self.source[self.start..self.current].iter().collect()
     }
 
-    fn make_token(&self, token_type: TokenType) -> Token {
-        let lexeme: String = self.current_lexeme();
-        let literal = match token_type {
-            TokenType::Number => Literal::Number(lexeme.parse().expect("Should be able to parse")),
-            TokenType::String => Literal::String(lexeme.clone()),
-            _ => Literal::Nil,
-        };
-        Token::new(token_type, lexeme, literal, self.line)
+    fn make_string_token(&self) -> Token {
+        let lexeme = self.current_lexeme();
+        let value = &lexeme.clone()[1..lexeme.len() - 1];
+        Token::new_string(value, lexeme, self.line)
+    }
+
+    fn make_number_token(&self) -> Token {
+        let lexeme = self.current_lexeme();
+        let value: f64 = lexeme.parse().expect("Should be able to parse");
+        Token::new_number(value, lexeme, self.line)
+    }
+
+    fn make_keyword_token(&self) -> Token {
+        let lexeme = self.current_lexeme();
+        let token_type = self.check_keyword(&lexeme);
+        match token_type {
+            TokenType::True => Token::new(token_type, lexeme, self.line, Some(Literal::True)),
+            TokenType::False => Token::new(token_type, lexeme, self.line, Some(Literal::False)),
+            TokenType::Nil => Token::new(token_type, lexeme, self.line, Some(Literal::Nil)),
+            _ => Token::new_simple(token_type, lexeme, self.line),
+        }
+    }
+
+    fn check_single_lexeme(&self, lexeme: &char) -> TokenType {
+        match lexeme {
+            '(' => TokenType::LeftParen,
+            ')' => TokenType::RightParen,
+            '{' => TokenType::LeftBrace,
+            '}' => TokenType::RightBrace,
+            ',' => TokenType::Comma,
+            '.' => TokenType::Dot,
+            '-' => TokenType::Minus,
+            '+' => TokenType::Plus,
+            ';' => TokenType::Semicolon,
+            '*' => TokenType::Star,
+            _ => unreachable!("Invalid single-char lexeme: {}", lexeme),
+        }
     }
 
     fn check_keyword(&self, lexeme: &str) -> TokenType {
@@ -319,15 +337,16 @@ pub enum ScanError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::token_type::Literal;
 
     // Helper function to create expected tokens easily
     fn token(token_type: TokenType, lexeme: &str, line: usize) -> Token {
         let literal = match token_type {
-            TokenType::Number => Literal::Number(lexeme.parse().unwrap()),
-            TokenType::String => Literal::String(lexeme.to_string()),
-            _ => Literal::Nil,
+            TokenType::Number => Some(Literal::Number(lexeme.parse().unwrap())),
+            TokenType::String => Some(Literal::String(lexeme.to_string())),
+            _ => None,
         };
-        Token::new(token_type, lexeme.to_string(), literal, line)
+        Token::new(token_type, lexeme.to_string(), line, literal)
     }
 
     #[test]
