@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::string::FromUtf8Error;
+use std::string::{FromUtf8Error, ParseError};
 
 use crate::scanner::ScanError;
 
@@ -142,4 +142,6 @@ pub struct RunError {
 pub enum RunErrorKind {
     #[error(transparent)]
     ScanError(#[from] ScanError),
+    #[error(transparent)]
+    ParseError(#[from] ParseError),
 }
