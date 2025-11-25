@@ -55,18 +55,16 @@ pub enum TokenType {
 pub enum Literal {
     Number(f64),
     String(String),
-    True,
-    False,
+    Boolean(bool),
     Nil,
 }
 
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Number(n) => write!(f, "{}", n),
-            Literal::String(s) => write!(f, "{}", s),
-            Literal::True => write!(f, "true"),
-            Literal::False => write!(f, "false"),
+            Literal::Number(n) => write!(f, "{n}"),
+            Literal::String(s) => write!(f, "{s}"),
+            Literal::Boolean(b) => write!(f, "{b}"),
             Literal::Nil => write!(f, "nil"),
         }
     }

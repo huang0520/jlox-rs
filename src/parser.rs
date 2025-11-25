@@ -202,7 +202,11 @@ mod tests {
             },
             lexeme: if value { "true" } else { "false" }.to_string(),
             line,
-            literal: Some(if value { Literal::True } else { Literal::False }),
+            literal: Some(if value {
+                Literal::Boolean(true)
+            } else {
+                Literal::Boolean(false)
+            }),
         }
     }
 
@@ -264,7 +268,7 @@ mod tests {
         fn boolean_true() {
             let tokens = vec![token_bool(true, 1), token_eof(1)];
             let expected = Expr::Literal {
-                value: Literal::True,
+                value: Literal::Boolean(true),
             };
             assert_parse_success(tokens, expected);
         }
@@ -273,7 +277,7 @@ mod tests {
         fn boolean_false() {
             let tokens = vec![token_bool(false, 1), token_eof(1)];
             let expected = Expr::Literal {
-                value: Literal::False,
+                value: Literal::Boolean(false),
             };
             assert_parse_success(tokens, expected);
         }
@@ -298,7 +302,7 @@ mod tests {
             let expected = Expr::Unary {
                 operator: bang,
                 right: Box::new(Expr::Literal {
-                    value: Literal::False,
+                    value: Literal::Boolean(false),
                 }),
             };
             assert_parse_success(tokens, expected);
@@ -597,7 +601,7 @@ mod tests {
             ];
             let expected = Expr::Grouping {
                 expression: Box::new(Expr::Literal {
-                    value: Literal::True,
+                    value: Literal::Boolean(true),
                 }),
             };
             assert_parse_success(tokens, expected);
@@ -649,7 +653,7 @@ mod tests {
             let expected = Expr::Grouping {
                 expression: Box::new(Expr::Grouping {
                     expression: Box::new(Expr::Literal {
-                        value: Literal::True,
+                        value: Literal::Boolean(true),
                     }),
                 }),
             };

@@ -279,8 +279,12 @@ impl Scanner {
         let lexeme = self.current_lexeme();
         let token_type = self.check_keyword(&lexeme);
         match token_type {
-            TokenType::True => Token::new(token_type, lexeme, self.line, Some(Literal::True)),
-            TokenType::False => Token::new(token_type, lexeme, self.line, Some(Literal::False)),
+            TokenType::True => {
+                Token::new(token_type, lexeme, self.line, Some(Literal::Boolean(true)))
+            }
+            TokenType::False => {
+                Token::new(token_type, lexeme, self.line, Some(Literal::Boolean(false)))
+            }
             TokenType::Nil => Token::new(token_type, lexeme, self.line, Some(Literal::Nil)),
             _ => Token::new_simple(token_type, lexeme, self.line),
         }
