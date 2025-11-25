@@ -1,3 +1,4 @@
+mod evaluate;
 mod print;
 
 use crate::{token::Token, token_type::Literal};

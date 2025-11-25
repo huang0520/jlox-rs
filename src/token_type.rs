@@ -59,6 +59,30 @@ pub enum Literal {
     Nil,
 }
 
+impl TryFrom<Literal> for f64 {
+    type Error = LiteralError;
+    fn try_from(lit: Literal) -> Result<Self, Self::Error> {
+        match lit {
+            Literal::Number(n) => Ok(n),
+            _ => Err(LiteralError::ExpectedNumber(lit)),
+        }
+    }
+}
+
+impl From<Literal> for bool {
+    fn from(lit: Literal) -> Self {
+        !matches!(lit, Literal::Boolean(false) | Literal::Nil)
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum LiteralError {
+    #[error("expected number, got {0}")]
+    ExpectedNumber(Literal),
+    #[error("expected string, got {0}")]
+    ExpectedString(Literal),
+}
+
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
