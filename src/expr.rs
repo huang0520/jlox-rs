@@ -1,5 +1,5 @@
-mod evaluate;
-mod print;
+pub mod evaluate;
+pub mod print;
 
 use crate::literal::Literal;
 use crate::token::Token;

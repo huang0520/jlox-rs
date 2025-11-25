@@ -18,43 +18,43 @@ impl Literal {
 }
 
 impl TryFrom<Literal> for f64 {
-    type Error = LiteralError;
+    type Error = TypeError;
     fn try_from(lit: Literal) -> Result<Self, Self::Error> {
         match lit {
             Literal::Number(n) => Ok(n),
-            _ => Err(LiteralError::ExpectedNumber(lit)),
+            _ => Err(TypeError::Number(lit)),
         }
     }
 }
 
 impl TryFrom<Literal> for String {
-    type Error = LiteralError;
+    type Error = TypeError;
     fn try_from(lit: Literal) -> Result<Self, Self::Error> {
         match lit {
             Literal::String(s) => Ok(s),
-            _ => Err(LiteralError::ExpectedString(lit)),
+            _ => Err(TypeError::String(lit)),
         }
     }
 }
 
 impl TryFrom<Literal> for bool {
-    type Error = LiteralError;
+    type Error = TypeError;
     fn try_from(lit: Literal) -> Result<Self, Self::Error> {
         match lit {
             Literal::Boolean(b) => Ok(b),
-            _ => Err(LiteralError::ExpectedBoolean(lit)),
+            _ => Err(TypeError::Boolean(lit)),
         }
     }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
-pub enum LiteralError {
+pub enum TypeError {
     #[error("expected number, got {0}")]
-    ExpectedNumber(Literal),
+    Number(Literal),
     #[error("expected string, got {0}")]
-    ExpectedString(Literal),
+    String(Literal),
     #[error("expected boolean, got {0}")]
-    ExpectedBoolean(Literal),
+    Boolean(Literal),
 }
 
 impl Display for Literal {

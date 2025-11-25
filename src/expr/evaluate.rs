@@ -1,5 +1,5 @@
 use crate::expr::Expr;
-use crate::literal::{Literal, LiteralError};
+use crate::literal::{Literal, TypeError};
 use crate::token_type::TokenType;
 
 impl<'src> Expr<'src> {
@@ -64,7 +64,7 @@ impl<'src> Expr<'src> {
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
-enum RuntimeError {
+pub enum RuntimeError {
     #[error(transparent)]
-    LiteralError(#[from] LiteralError),
+    LiteralError(#[from] TypeError),
 }
