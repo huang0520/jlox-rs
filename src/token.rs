@@ -1,19 +1,21 @@
+use std::borrow::Cow;
 use std::fmt::Display;
 
-use crate::token_type::{Literal, TokenType};
+use crate::literal::Literal;
+use crate::token_type::TokenType;
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Token {
+pub struct Token<'src> {
     pub token_type: TokenType,
-    pub lexeme: String,
+    pub lexeme: Cow<'src, str>,
     pub line: usize,
     pub literal: Option<Literal>,
 }
 
-impl Token {
+impl<'src> Token<'src> {
     pub fn new(
         token_type: TokenType,
-        lexeme: impl Into<String>,
+        lexeme: &'src str,
         line: usize,
         literal: Option<Literal>,
     ) -> Self {
@@ -25,7 +27,7 @@ impl Token {
         }
     }
 
-    pub fn new_simple(token_type: TokenType, lexeme: impl Into<String>, line: usize) -> Self {
+    pub fn new_simple(token_type: TokenType, lexeme: &'src str, line: usize) -> Self {
         Token {
             token_type,
             lexeme: lexeme.into(),
@@ -34,7 +36,7 @@ impl Token {
         }
     }
 
-    pub fn new_number(value: f64, lexeme: impl Into<String>, line: usize) -> Self {
+    pub fn new_number(value: f64, lexeme: &'src str, line: usize) -> Self {
         Token {
             token_type: TokenType::Number,
             lexeme: lexeme.into(),
@@ -43,7 +45,7 @@ impl Token {
         }
     }
 
-    pub fn new_string(value: impl Into<String>, lexeme: impl Into<String>, line: usize) -> Self {
+    pub fn new_string(value: &'src str, lexeme: &'src str, line: usize) -> Self {
         Token {
             token_type: TokenType::String,
             lexeme: lexeme.into(),
@@ -55,15 +57,15 @@ impl Token {
     pub fn new_eof(line: usize) -> Self {
         Token {
             token_type: TokenType::Eof,
-            lexeme: String::new(),
+            lexeme: Cow::Borrowed(""),
             line,
             literal: None,
         }
     }
 }
 
-impl Display for Token {
+impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} {:?}", self.token_type, self.lexeme)
+        write!(f, "{} {}", self.token_type, self.lexeme)
     }
 }

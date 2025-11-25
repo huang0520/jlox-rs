@@ -1,6 +1,6 @@
 use crate::expr::Expr;
 
-impl Expr {
+impl<'src> Expr<'src> {
     pub fn print(&self) -> String {
         match self {
             Expr::Binary {
@@ -58,15 +58,12 @@ impl Expr {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        token::Token,
-        token_type::{Literal, TokenType},
-    };
+    use crate::{literal::Literal, token::Token, token_type::TokenType};
 
     use super::*;
 
     // Helper to create number literal expression
-    fn num_expr(value: f64) -> Expr {
+    fn num_expr(value: f64) -> Expr<'static> {
         Expr::Literal {
             value: Literal::Number(value),
         }

@@ -51,45 +51,56 @@ pub enum TokenType {
     Eof,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum Literal {
-    Number(f64),
-    String(String),
-    Boolean(bool),
-    Nil,
-}
-
-impl TryFrom<Literal> for f64 {
-    type Error = LiteralError;
-    fn try_from(lit: Literal) -> Result<Self, Self::Error> {
-        match lit {
-            Literal::Number(n) => Ok(n),
-            _ => Err(LiteralError::ExpectedNumber(lit)),
-        }
-    }
-}
-
-impl From<Literal> for bool {
-    fn from(lit: Literal) -> Self {
-        !matches!(lit, Literal::Boolean(false) | Literal::Nil)
-    }
-}
-
-#[derive(Debug, thiserror::Error, PartialEq)]
-pub enum LiteralError {
-    #[error("expected number, got {0}")]
-    ExpectedNumber(Literal),
-    #[error("expected string, got {0}")]
-    ExpectedString(Literal),
-}
-
-impl Display for Literal {
+impl Display for TokenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Number(n) => write!(f, "{n}"),
-            Literal::String(s) => write!(f, "{s}"),
-            Literal::Boolean(b) => write!(f, "{b}"),
-            Literal::Nil => write!(f, "nil"),
+            // Single-character tokens
+            TokenType::LeftParen => write!(f, "LeftParen"),
+            TokenType::RightParen => write!(f, "RightParen"),
+            TokenType::LeftBrace => write!(f, "LeftBrace"),
+            TokenType::RightBrace => write!(f, "RightBrace"),
+            TokenType::Comma => write!(f, "Comma"),
+            TokenType::Dot => write!(f, "Dot"),
+            TokenType::Minus => write!(f, "Minus"),
+            TokenType::Plus => write!(f, "Plus"),
+            TokenType::Semicolon => write!(f, "Semicolon"),
+            TokenType::Slash => write!(f, "Slash"),
+            TokenType::Star => write!(f, "Star"),
+
+            // One or two character tokens
+            TokenType::Bang => write!(f, "Bang"),
+            TokenType::BangEqual => write!(f, "BangEqual"),
+            TokenType::Equal => write!(f, "Equal"),
+            TokenType::EqualEqual => write!(f, "EqualEqual"),
+            TokenType::Greater => write!(f, "Greater"),
+            TokenType::GreaterEqual => write!(f, "GreaterEqual"),
+            TokenType::Less => write!(f, "Less"),
+            TokenType::LessEqual => write!(f, "LessEqual"),
+
+            // Literals
+            TokenType::Identifier => write!(f, "Identifier"),
+            TokenType::String => write!(f, "String"),
+            TokenType::Number => write!(f, "Number"),
+
+            // Keywords
+            TokenType::And => write!(f, "And"),
+            TokenType::Class => write!(f, "Class"),
+            TokenType::Else => write!(f, "Else"),
+            TokenType::False => write!(f, "False"),
+            TokenType::Fun => write!(f, "Fun"),
+            TokenType::For => write!(f, "For"),
+            TokenType::If => write!(f, "If"),
+            TokenType::Nil => write!(f, "Nil"),
+            TokenType::Or => write!(f, "Or"),
+            TokenType::Print => write!(f, "Print"),
+            TokenType::Return => write!(f, "Return"),
+            TokenType::Super => write!(f, "Super"),
+            TokenType::This => write!(f, "This"),
+            TokenType::True => write!(f, "True"),
+            TokenType::Var => write!(f, "Var"),
+            TokenType::While => write!(f, "While"),
+
+            TokenType::Eof => write!(f, "Eof"),
         }
     }
 }

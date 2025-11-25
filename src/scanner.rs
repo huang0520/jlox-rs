@@ -1,283 +1,194 @@
+use std::iter::Peekable;
+use std::str::CharIndices;
+
+use crate::literal::Literal;
 use crate::token::Token;
-use crate::token_type::{Literal, TokenType};
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum State {
-    Start,
-    String,
-    Integer,
-    Decimal,
-    Identifier,
-    CommentLine,
-    CommentBlock,
-}
-
-pub enum Transition {
-    Advance, // Increase Current but keep Start
-    Skip,    // Increase Current and Start
-    Emit(Token),
-    Error(ScanError),
-}
+use crate::token_type::TokenType;
 
 #[derive(Debug)]
-pub struct Scanner {
-    source: Vec<char>,
-    state: State,
+pub struct Scanner<'src> {
+    source: &'src str,
+    chars: Peekable<CharIndices<'src>>,
     line: usize,
     start: usize,
     current: usize,
 }
 
-impl Scanner {
-    pub fn new(source: &str) -> Self {
-        Scanner {
-            source: source.chars().collect(),
-            state: State::Start,
+impl<'src> Scanner<'src> {
+    pub fn scan_tokens(source: &'src str) -> Result<Vec<Token<'src>>, Vec<ScanError>> {
+        let mut tokens: Vec<Token<'src>> = Vec::new();
+        let mut errors = Vec::new();
+
+        let mut scanner = Scanner {
+            source,
+            chars: source.char_indices().peekable(),
             line: 1,
             start: 0,
             current: 0,
-        }
-    }
+        };
 
-    pub fn scan_tokens(&mut self) -> Result<Vec<Token>, Vec<ScanError>> {
-        let mut tokens = Vec::new();
-        let mut errors = Vec::new();
-
-        while self.current < self.source.len() {
-            let transition = self.scan_token();
-
-            match transition {
-                Transition::Emit(token) => {
-                    tokens.push(token);
-                    self.start = self.current;
-                    self.state = State::Start;
-                }
-                Transition::Advance => {}
-                Transition::Skip => {
-                    self.start = self.current;
-                    self.state = State::Start;
-                }
-                Transition::Error(e) => {
-                    errors.push(e);
-                    self.start = self.current;
-                    self.state = State::Start;
-                }
-            };
+        loop {
+            scanner.start = scanner.current;
+            match scanner.advance() {
+                Some(c) => match scanner.scan_token(c) {
+                    Ok(Some(t)) => tokens.push(t),
+                    Ok(None) => {}
+                    Err(e) => errors.push(e),
+                },
+                None => break,
+            }
         }
 
-        tokens.push(Token::new_eof(self.line));
-
-        if !errors.is_empty() {
-            Err(errors)
-        } else {
+        tokens.push(Token::new_eof(scanner.line));
+        if errors.is_empty() {
             Ok(tokens)
+        } else {
+            Err(errors)
         }
     }
 
-    fn scan_token(&mut self) -> Transition {
-        let c = self.advance();
-        match self.state {
-            State::Start => self.start(c),
-            State::String => self.string(),
-            State::Integer => self.integer(),
-            State::Decimal => self.decimal(),
-            State::Identifier => self.identifier(),
-            State::CommentLine => self.comment_line(),
-            State::CommentBlock => self.comment_block(c),
-        }
-    }
-
-    fn start(&mut self, c: char) -> Transition {
+    fn scan_token(&mut self, c: char) -> Result<Option<Token<'src>>, ScanError> {
         match c {
             // Single-char token
-            '(' | ')' | '{' | '}' | ',' | '.' | '-' | '+' | ';' | '*' => Transition::Emit(
-                Token::new_simple(self.check_single_lexeme(&c), c, self.line),
-            ),
+            '(' | ')' | '{' | '}' | ',' | '.' | '-' | '+' | ';' | '*' => {
+                Ok(Some(Token::new_simple(
+                    self.check_single_lexeme(&c),
+                    self.current_lexeme(),
+                    self.line,
+                )))
+            }
 
             // Double-char token
-            '!' => self.emit_if_next('=', TokenType::BangEqual, TokenType::Bang),
-            '=' => self.emit_if_next('=', TokenType::EqualEqual, TokenType::Equal),
-            '>' => self.emit_if_next('=', TokenType::GreaterEqual, TokenType::Greater),
-            '<' => self.emit_if_next('=', TokenType::LessEqual, TokenType::Less),
+            '!' => Ok(Some(self.lookahead_token(
+                '=',
+                TokenType::BangEqual,
+                TokenType::Bang,
+            ))),
+            '=' => Ok(Some(self.lookahead_token(
+                '=',
+                TokenType::EqualEqual,
+                TokenType::Equal,
+            ))),
+            '>' => Ok(Some(self.lookahead_token(
+                '=',
+                TokenType::GreaterEqual,
+                TokenType::Greater,
+            ))),
+            '<' => Ok(Some(self.lookahead_token(
+                '=',
+                TokenType::LessEqual,
+                TokenType::Less,
+            ))),
             '/' => {
-                if self.peek() == Some('/') {
-                    self.state = State::CommentLine;
-                    Transition::Advance
-                } else if self.peek() == Some('*') {
-                    self.state = State::CommentBlock;
+                if let Some((_, nc)) = self.chars.next_if(|&(_, c)| matches!(c, '/' | '*')) {
                     self.advance();
-                    Transition::Advance
+                    if nc == '/' {
+                        while self.chars.next_if(|&(_, c)| c != '\n').is_some() {}
+                    } else {
+                        self.scan_comment_block()?;
+                    }
+                    Ok(None)
                 } else {
-                    Transition::Emit(Token::new_simple(TokenType::Slash, '/', self.line))
+                    Ok(Some(Token::new_simple(
+                        TokenType::Slash,
+                        self.current_lexeme(),
+                        self.line,
+                    )))
                 }
             }
 
             // Whitespace
-            ' ' | '\r' | '\t' => Transition::Skip,
+            ' ' | '\r' | '\t' => Ok(None),
             '\n' => {
                 self.line += 1;
-                Transition::Skip
+                Ok(None)
             }
 
             // State transitions
-            '"' => {
-                self.state = State::String;
-                Transition::Advance
-            }
-            '0'..='9' => match self.peek() {
-                Some('0'..='9') => {
-                    self.state = State::Integer;
-                    Transition::Advance
-                }
-                Some('.') => {
-                    self.state = State::Decimal;
-                    Transition::Advance
-                }
-                _ => Transition::Emit(self.make_number_token()),
-            },
-            'a'..='z' | 'A'..='Z' | '_' => {
-                if self
-                    .peek()
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-                {
-                    self.state = State::Identifier;
-                    Transition::Advance
-                } else {
-                    Transition::Emit(self.make_keyword_token())
-                }
-            }
+            '"' => Ok(Some(self.scan_string()?)),
+            '0'..='9' => Ok(Some(self.scan_number())),
+            'a'..='z' | 'A'..='Z' | '_' => Ok(Some(self.scan_identifier())),
 
-            _ => Transition::Error(ScanError::UnexpectedChar {
+            _ => Err(ScanError::UnexpectedChar {
                 found: c,
                 line: self.line,
             }),
         }
     }
 
-    fn comment_line(&mut self) -> Transition {
-        let next_c = self.peek();
-        if next_c == Some('\n') || next_c.is_none() {
-            Transition::Skip
-        } else {
-            Transition::Advance
-        }
-    }
-
-    fn comment_block(&mut self, c: char) -> Transition {
-        if c == '*' && self.peek().is_some_and(|c| c == '/') {
-            self.advance();
-            return Transition::Skip;
-        }
-
-        match self.peek() {
-            Some('\n') => {
-                self.line += 1;
-                Transition::Advance
-            }
-            Some(_) => Transition::Advance,
-            None => Transition::Error(ScanError::UnterminatedString { line: self.line }),
-        }
-    }
-
-    fn string(&mut self) -> Transition {
-        match self.peek() {
-            Some('"') => {
+    fn scan_comment_block(&mut self) -> Result<(), ScanError> {
+        while let Some((_, c)) = self.chars.next() {
+            if c == '*' && self.chars.peek().is_some_and(|&(_, c)| c == '/') {
                 self.advance();
-                Transition::Emit(self.make_string_token())
+                return Ok(());
             }
-            Some('\n') => {
+
+            if c == '\n' {
                 self.line += 1;
-                Transition::Advance
             }
-            Some(_) => Transition::Advance,
-            None => Transition::Error(ScanError::UnterminatedString { line: self.line }),
         }
+        Err(ScanError::UnterminatedCommentBlock { line: self.line })
     }
 
-    fn integer(&mut self) -> Transition {
-        match self.peek() {
-            Some('0'..='9') => Transition::Advance,
-            Some('.') => match self.peek_next() {
-                Some('0'..='9') => {
-                    self.state = State::Decimal;
-                    Transition::Advance
+    fn scan_string(&mut self) -> Result<Token<'src>, ScanError> {
+        while self.peek().is_some() {
+            let c = self.advance().expect("next char exist");
+            match c {
+                '"' => {
+                    let lexeme = self.current_lexeme();
+                    let value = &lexeme[1..lexeme.len() - 1];
+                    return Ok(Token::new_string(value, lexeme, self.line));
                 }
-                _ => Transition::Emit(self.make_number_token()),
-            },
-            _ => Transition::Emit(self.make_number_token()),
+                '\n' => self.line += 1,
+                _ => {}
+            }
         }
+        Err(ScanError::UnterminatedString { line: self.line })
     }
 
-    fn decimal(&self) -> Transition {
-        match self.peek() {
-            Some('0'..='9') => Transition::Advance,
-            _ => Transition::Emit(self.make_number_token()),
+    fn scan_number(&mut self) -> Token<'src> {
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                self.advance();
+            } else {
+                break;
+            }
         }
-    }
 
-    fn identifier(&mut self) -> Transition {
-        if self
-            .peek()
-            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            Transition::Advance
-        } else {
-            Transition::Emit(self.make_keyword_token())
+        // Check decimal
+        if self.peek() == Some('.') {
+            // Check ahead
+            let mut ahead_iter = self.chars.clone();
+            ahead_iter.next();
+
+            if ahead_iter.next().map(|(_, c)| c).is_some() {
+                // Consume '.'
+                self.advance();
+                while let Some(c) = self.peek() {
+                    if c.is_ascii_digit() {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
         }
-    }
 
-    // helper function
-    fn advance(&mut self) -> char {
-        let c = self.source[self.current];
-        self.current += 1;
-        c
-    }
-    fn peek(&self) -> Option<char> {
-        self.source.get(self.current).copied()
-    }
-
-    fn peek_next(&self) -> Option<char> {
-        self.source.get(self.current + 1).copied()
-    }
-
-    fn emit_if_next(
-        &mut self,
-        expected: char,
-        then_type: TokenType,
-        else_type: TokenType,
-    ) -> Transition {
-        let token_type = if self.peek() == Some(expected) {
-            self.advance();
-            then_type
-        } else {
-            else_type
-        };
-        Transition::Emit(Token::new_simple(
-            token_type,
-            self.current_lexeme(),
-            self.line,
-        ))
-    }
-
-    fn current_lexeme(&self) -> String {
-        self.source[self.start..self.current].iter().collect()
-    }
-
-    fn make_string_token(&self) -> Token {
-        let lexeme = self.current_lexeme();
-        let value = &lexeme.clone()[1..lexeme.len() - 1];
-        Token::new_string(value, lexeme, self.line)
-    }
-
-    fn make_number_token(&self) -> Token {
         let lexeme = self.current_lexeme();
         let value: f64 = lexeme.parse().expect("Should be able to parse");
         Token::new_number(value, lexeme, self.line)
     }
 
-    fn make_keyword_token(&self) -> Token {
+    fn scan_identifier(&mut self) -> Token<'src> {
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            self.advance();
+        }
+
         let lexeme = self.current_lexeme();
-        let token_type = self.check_keyword(&lexeme);
+        let token_type = self.check_keyword(lexeme);
         match token_type {
             TokenType::True => {
                 Token::new(token_type, lexeme, self.line, Some(Literal::Boolean(true)))
@@ -288,6 +199,36 @@ impl Scanner {
             TokenType::Nil => Token::new(token_type, lexeme, self.line, Some(Literal::Nil)),
             _ => Token::new_simple(token_type, lexeme, self.line),
         }
+    }
+
+    // helper function
+    fn advance(&mut self) -> Option<char> {
+        let (idx, c) = self.chars.next()?;
+        self.current = idx + c.len_utf8();
+        Some(c)
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        self.chars.peek().map(|&(_, c)| c)
+    }
+
+    fn lookahead_token(
+        &mut self,
+        expected: char,
+        match_type: TokenType,
+        default_type: TokenType,
+    ) -> Token<'src> {
+        let token_type = if self.peek().is_some_and(|c| c == expected) {
+            self.advance();
+            match_type
+        } else {
+            default_type
+        };
+        Token::new_simple(token_type, self.current_lexeme(), self.line)
+    }
+
+    fn current_lexeme(&self) -> &'src str {
+        &self.source[self.start..self.current]
     }
 
     fn check_single_lexeme(&self, lexeme: &char) -> TokenType {
@@ -329,330 +270,338 @@ impl Scanner {
     }
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum ScanError {
     #[error("unexpected character '{found}'")]
     UnexpectedChar { found: char, line: usize },
 
     #[error("unterminated string")]
     UnterminatedString { line: usize },
+
+    #[error("unterminated comment block")]
+    UnterminatedCommentBlock { line: usize },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::token_type::Literal;
+    use crate::literal::Literal;
+    use crate::token::Token;
+    use crate::token_type::TokenType;
 
-    // Helper function to create expected tokens easily
-    fn token(token_type: TokenType, lexeme: &str, line: usize) -> Token {
-        let literal = match token_type {
-            TokenType::Number => Some(Literal::Number(lexeme.parse().unwrap())),
-            TokenType::String => Some(Literal::String(lexeme.to_string())),
-            _ => None,
-        };
-        Token::new(token_type, lexeme.to_string(), line, literal)
+    // Helper to run the scanner
+    fn scan<'a>(source: &'a str) -> Result<Vec<Token<'a>>, Vec<ScanError>> {
+        Scanner::scan_tokens(source)
+    }
+
+    // Helper to assert a successful scan with expected tokens (EOF auto-added)
+    fn assert_tokens(
+        source: &str,
+        expected_types: &[TokenType],
+        expected_literals: Option<&[Option<Literal>]>,
+    ) {
+        let tokens = scan(source).unwrap();
+        assert_eq!(tokens.len(), expected_types.len() + 1); // +1 for EOF
+        for (i, &tt) in expected_types.iter().enumerate() {
+            assert_eq!(tokens[i].token_type, tt);
+            if let Some(lits) = expected_literals {
+                assert_eq!(tokens[i].literal, lits[i]);
+            }
+        }
+        assert_eq!(tokens.last().unwrap().token_type, TokenType::Eof);
+    }
+
+    // Helper to assert errors
+    fn assert_errors(source: &str, expected_errors: &[ScanError]) {
+        match scan(source) {
+            Ok(_) => panic!("Expected errors, got tokens"),
+            Err(errors) => assert_eq!(errors, expected_errors),
+        }
     }
 
     #[test]
     fn test_single_char_tokens() {
-        let mut scanner = Scanner::new("(){},.-+;*");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::LeftParen, "(", 1),
-            token(TokenType::RightParen, ")", 1),
-            token(TokenType::LeftBrace, "{", 1),
-            token(TokenType::RightBrace, "}", 1),
-            token(TokenType::Comma, ",", 1),
-            token(TokenType::Dot, ".", 1),
-            token(TokenType::Minus, "-", 1),
-            token(TokenType::Plus, "+", 1),
-            token(TokenType::Semicolon, ";", 1),
-            token(TokenType::Star, "*", 1),
-            token(TokenType::Eof, "", 1),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        for (actual, expected) in tokens.iter().zip(expected.iter()) {
-            assert_eq!(actual.token_type, expected.token_type);
-            assert_eq!(actual.lexeme, expected.lexeme);
-            assert_eq!(actual.line, expected.line);
-        }
+        assert_tokens(
+            "() {} , . - + ; *",
+            &[
+                TokenType::LeftParen,
+                TokenType::RightParen,
+                TokenType::LeftBrace,
+                TokenType::RightBrace,
+                TokenType::Comma,
+                TokenType::Dot,
+                TokenType::Minus,
+                TokenType::Plus,
+                TokenType::Semicolon,
+                TokenType::Star,
+            ],
+            None,
+        );
     }
 
     #[test]
     fn test_double_char_tokens() {
-        let mut scanner = Scanner::new("! != = == > >= < <=");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Bang, "!", 1),
-            token(TokenType::BangEqual, "!=", 1),
-            token(TokenType::Equal, "=", 1),
-            token(TokenType::EqualEqual, "==", 1),
-            token(TokenType::Greater, ">", 1),
-            token(TokenType::GreaterEqual, ">=", 1),
-            token(TokenType::Less, "<", 1),
-            token(TokenType::LessEqual, "<=", 1),
-            token(TokenType::Eof, "", 1),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        for (actual, expected) in tokens.iter().zip(expected.iter()) {
-            assert_eq!(actual.token_type, expected.token_type);
-            assert_eq!(actual.lexeme, expected.lexeme);
-        }
-    }
-
-    #[test]
-    fn test_string_literal() {
-        let mut scanner = Scanner::new(r#""hello world""#);
-        let tokens = scanner.scan_tokens().unwrap();
-
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0].token_type, TokenType::String);
-        assert_eq!(tokens[0].lexeme, "\"hello world\"");
-        assert_eq!(tokens[1].token_type, TokenType::Eof);
-    }
-
-    #[test]
-    fn test_string_multiline() {
-        let mut scanner = Scanner::new("\"hello\nworld\"");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0].token_type, TokenType::String);
-        assert_eq!(tokens[0].line, 2); // Line should increment
-        assert_eq!(tokens[1].token_type, TokenType::Eof);
-    }
-
-    #[test]
-    fn test_unterminated_string_error() {
-        let mut scanner = Scanner::new(r#""unterminated"#);
-        let result = scanner.scan_tokens();
-
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 1);
-
-        let scan_error = &errors[0];
-        match scan_error {
-            ScanError::UnterminatedString { line } => {
-                assert_eq!(*line, 1);
-            }
-            _ => panic!("Expected UnterminatedString, got {:?}", scan_error),
-        }
-    }
-
-    #[test]
-    fn test_integer_number() {
-        let mut scanner = Scanner::new("123 456.");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Number, "123", 1),
-            token(TokenType::Number, "456", 1),
-            token(TokenType::Dot, ".", 1),
-            token(TokenType::Eof, "", 1),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        for (actual, expected) in tokens.iter().zip(expected.iter()) {
-            assert_eq!(actual.token_type, expected.token_type);
-            assert_eq!(actual.lexeme, expected.lexeme);
-        }
-    }
-
-    #[test]
-    fn test_decimal_number() {
-        let mut scanner = Scanner::new("123.45 0.99.");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Number, "123.45", 1),
-            token(TokenType::Number, "0.99", 1),
-            token(TokenType::Dot, ".", 1),
-            token(TokenType::Eof, "", 1),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        for (actual, expected) in tokens.iter().zip(expected.iter()) {
-            assert_eq!(actual.token_type, expected.token_type);
-            assert_eq!(actual.lexeme, expected.lexeme);
-        }
-    }
-
-    #[test]
-    fn test_identifier() {
-        let mut scanner = Scanner::new("my_var _test abc123");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Identifier, "my_var", 1),
-            token(TokenType::Identifier, "_test", 1),
-            token(TokenType::Identifier, "abc123", 1),
-            token(TokenType::Eof, "", 1),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        for (actual, expected) in tokens.iter().zip(expected.iter()) {
-            assert_eq!(actual.token_type, expected.token_type);
-            assert_eq!(actual.lexeme, expected.lexeme);
-        }
-    }
-
-    #[test]
-    fn test_keywords() {
-        let input = "and class else false for fun if nil or print return super this true var while";
-        let mut scanner = Scanner::new(input);
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected_types = [
-            TokenType::And,
-            TokenType::Class,
-            TokenType::Else,
-            TokenType::False,
-            TokenType::For,
-            TokenType::Fun,
-            TokenType::If,
-            TokenType::Nil,
-            TokenType::Or,
-            TokenType::Print,
-            TokenType::Return,
-            TokenType::Super,
-            TokenType::This,
-            TokenType::True,
-            TokenType::Var,
-            TokenType::While,
-            TokenType::Eof,
-        ];
-
-        assert_eq!(tokens.len(), expected_types.len());
-        for (actual, expected) in tokens.iter().zip(expected_types.iter()) {
-            assert_eq!(&actual.token_type, expected);
-        }
-    }
-
-    #[test]
-    fn test_line_comment() {
-        let mut scanner = Scanner::new("// this is a comment\n123");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Number, "123", 2), // Line should be 2 after newline
-            token(TokenType::Eof, "", 2),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        assert_eq!(tokens[0].token_type, TokenType::Number);
-        assert_eq!(tokens[0].line, 2);
-    }
-
-    #[test]
-    fn test_block_comment() {
-        let mut scanner = Scanner::new("/* this is a\nblock comment */123");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Number, "123", 2), // Line should be 2 after newline
-            token(TokenType::Eof, "", 2),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        assert_eq!(tokens[0].token_type, TokenType::Number);
-        assert_eq!(tokens[0].line, 2);
-    }
-
-    #[test]
-    fn test_slash_vs_comment() {
-        let mut scanner = Scanner::new("/ //");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Slash, "/", 1),
-            token(TokenType::Eof, "", 1),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        assert_eq!(tokens[0].token_type, TokenType::Slash);
-    }
-
-    #[test]
-    fn test_unterminated_comment() {
-        let mut scanner = Scanner::new("/*/");
-        let result = scanner.scan_tokens();
-
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 1);
-
-        let scan_error = &errors[0];
-        match scan_error {
-            ScanError::UnterminatedString { line } => {
-                assert_eq!(*line, 1);
-            }
-            _ => panic!("Expected UnterminatedString, got {:?}", scan_error),
-        }
-    }
-
-    #[test]
-    fn test_whitespace_handling() {
-        let mut scanner = Scanner::new("  \t\n   \t\n 123 \t ");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        let expected = [
-            token(TokenType::Number, "123", 3), // Should be on line 3 after newlines
-            token(TokenType::Eof, "", 3),
-        ];
-
-        assert_eq!(tokens.len(), expected.len());
-        assert_eq!(tokens[0].token_type, TokenType::Number);
-        assert_eq!(tokens[0].line, 3);
-    }
-
-    #[test]
-    fn test_empty_input() {
-        let mut scanner = Scanner::new("");
-        let tokens = scanner.scan_tokens().unwrap();
-
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].token_type, TokenType::Eof);
-    }
-
-    #[test]
-    fn test_complex_expression() {
-        let mut scanner = Scanner::new(
-            r#"var x = 10 + 5.5; // initialize x
-            if (x > 10) {
-                print "hello";
-            }"#,
+        assert_tokens(
+            "! = == != > >= < <=",
+            &[
+                TokenType::Bang,
+                TokenType::Equal,
+                TokenType::EqualEqual,
+                TokenType::BangEqual,
+                TokenType::Greater,
+                TokenType::GreaterEqual,
+                TokenType::Less,
+                TokenType::LessEqual,
+            ],
+            None,
         );
-        let tokens = scanner.scan_tokens().unwrap();
+    }
 
-        // Just verify we get the right sequence without panicking
-        assert!(!tokens.is_empty());
-        assert_eq!(tokens[0].token_type, TokenType::Var);
-        assert_eq!(tokens[1].token_type, TokenType::Identifier);
-        assert_eq!(tokens[2].token_type, TokenType::Equal);
-        assert_eq!(tokens[tokens.len() - 1].token_type, TokenType::Eof);
+    #[test]
+    fn test_divide_vs_comment() {
+        // / as slash
+        assert_tokens("/", &[TokenType::Slash], None);
+
+        // // comment skipped
+        assert_tokens(
+            "var x = 1; // this is a comment",
+            &[
+                TokenType::Var,
+                TokenType::Identifier,
+                TokenType::Equal,
+                TokenType::Number,
+                TokenType::Semicolon,
+            ],
+            Some(&[None, None, None, Some(Literal::Number(1.0)), None]),
+        );
+
+        // /* */ block comment skipped
+        assert_tokens(
+            "var x = 1; /* multi line comment */",
+            &[
+                TokenType::Var,
+                TokenType::Identifier,
+                TokenType::Equal,
+                TokenType::Number,
+                TokenType::Semicolon,
+            ],
+            Some(&[None, None, None, Some(Literal::Number(1.0)), None]),
+        );
+
+        // Nested or unterminated handled as per impl (no nesting, error on unterm)
+    }
+
+    #[test]
+    fn test_unterminated_comment_block() {
+        let source = "/* unterminated";
+        let expected_error = ScanError::UnterminatedCommentBlock { line: 1 };
+        assert_errors(source, &[expected_error]);
+    }
+
+    #[test]
+    fn test_strings() {
+        // Valid string
+        assert_tokens(
+            r#""hello""#,
+            &[TokenType::String],
+            Some(&[Some(Literal::String("hello".to_string()))]),
+        );
+
+        // String with newline (increments line)
+        assert_tokens(
+            r#""hello
+world""#,
+            &[TokenType::String],
+            Some(&[Some(Literal::String("hello\nworld".to_string()))]), // Line 2 for EOF
+        );
+
+        // Unterminated string
+        let source = r#""unterminated"#;
+        let expected_error = ScanError::UnterminatedString { line: 1 };
+        assert_errors(source, &[expected_error]);
+    }
+
+    #[test]
+    fn test_numbers() {
+        // Integer
+        assert_tokens(
+            "123",
+            &[TokenType::Number],
+            Some(&[Some(Literal::Number(123.0))]),
+        );
+
+        // Decimal
+        assert_tokens(
+            "1.23",
+            &[TokenType::Number],
+            Some(&[Some(Literal::Number(1.23))]),
+        );
+
+        // Multiple numbers
+        assert_tokens(
+            "1 2.0 3",
+            &[TokenType::Number, TokenType::Number, TokenType::Number],
+            Some(&[
+                Some(Literal::Number(1.0)),
+                Some(Literal::Number(2.0)),
+                Some(Literal::Number(3.0)),
+            ]),
+        );
+
+        assert_tokens(
+            "1.",
+            &[TokenType::Number, TokenType::Dot],
+            Some(&[Some(Literal::Number(1.0)), None]),
+        );
+
+        assert_tokens(
+            ".5",
+            &[TokenType::Dot, TokenType::Number],
+            Some(&[None, Some(Literal::Number(5.0))]),
+        );
+    }
+
+    #[test]
+    fn test_identifiers_and_keywords() {
+        // Keywords
+        assert_tokens(
+            "and class else false for fun if nil or print return super this true var while",
+            &[
+                TokenType::And,
+                TokenType::Class,
+                TokenType::Else,
+                TokenType::False,
+                TokenType::For,
+                TokenType::Fun,
+                TokenType::If,
+                TokenType::Nil,
+                TokenType::Or,
+                TokenType::Print,
+                TokenType::Return,
+                TokenType::Super,
+                TokenType::This,
+                TokenType::True,
+                TokenType::Var,
+                TokenType::While,
+            ],
+            Some(&[
+                None,
+                None,
+                None,
+                Some(Literal::Boolean(false)),
+                None,
+                None,
+                None,
+                Some(Literal::Nil),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(Literal::Boolean(true)),
+                None,
+                None,
+            ]),
+        );
+
+        // Identifier
+        assert_tokens("variable", &[TokenType::Identifier], None);
+
+        // With underscore/alphanum
+        assert_tokens("_var123", &[TokenType::Identifier], None);
+    }
+
+    #[test]
+    fn test_whitespace_and_newlines() {
+        assert_tokens(
+            "let \n x = 1; \t\r\n",
+            &[
+                TokenType::Identifier,
+                TokenType::Identifier,
+                TokenType::Equal,
+                TokenType::Number,
+                TokenType::Semicolon,
+            ],
+            Some(&[None, None, None, Some(Literal::Number(1.0)), None]),
+        );
+        // EOF on line 3
     }
 
     #[test]
     fn test_unexpected_char() {
-        let mut scanner = Scanner::new("@");
-        let result = scanner.scan_tokens();
+        let source = "@";
+        let expected_error = ScanError::UnexpectedChar {
+            found: '@',
+            line: 1,
+        };
+        assert_errors(source, &[expected_error]);
+    }
 
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 1);
+    #[test]
+    fn test_empty_source() {
+        let tokens = scan("").unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, TokenType::Eof);
+        assert_eq!(tokens[0].line, 1);
+    }
 
-        let scan_error = &errors[0];
-        match scan_error {
-            ScanError::UnexpectedChar { found, line } => {
-                assert_eq!(*found, '@');
-                assert_eq!(*line, 1);
-            }
-            _ => panic!("Expected UnexpectedChar, got {:?}", scan_error),
-        }
+    #[test]
+    fn test_mixed_input() {
+        let source = r#"
+            var x = "hello"; /* comment */ if (true) { print x; } // end
+        "#;
+        assert_tokens(
+            source,
+            &[
+                TokenType::Var,
+                TokenType::Identifier,
+                TokenType::Equal,
+                TokenType::String,
+                TokenType::Semicolon,
+                TokenType::If,
+                TokenType::LeftParen,
+                TokenType::True,
+                TokenType::RightParen,
+                TokenType::LeftBrace,
+                TokenType::Print,
+                TokenType::Identifier,
+                TokenType::Semicolon,
+                TokenType::RightBrace,
+            ],
+            Some(&[
+                None,
+                None,
+                None,
+                Some(Literal::String("hello".to_string())),
+                None,
+                None,
+                None,
+                Some(Literal::Boolean(true)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]),
+        );
+        // EOF on line 3
+    }
+
+    #[test]
+    fn test_multiple_errors() {
+        let source = r#"@ # "unterm@str"#;
+        let expected_errors = vec![
+            ScanError::UnexpectedChar {
+                found: '@',
+                line: 1,
+            },
+            ScanError::UnexpectedChar {
+                found: '#',
+                line: 1,
+            },
+            ScanError::UnterminatedString { line: 1 },
+        ];
+        assert_errors(source, &expected_errors);
     }
 }

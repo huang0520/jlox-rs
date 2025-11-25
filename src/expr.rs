@@ -1,56 +1,57 @@
 mod evaluate;
 mod print;
 
-use crate::{token::Token, token_type::Literal};
+use crate::literal::Literal;
+use crate::token::Token;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum Expr<'src> {
     Assign {
-        name: Token,
-        value: Box<Expr>,
+        name: Token<'src>,
+        value: Box<Expr<'src>>,
     },
     Binary {
-        left: Box<Expr>,
-        operator: Token,
-        right: Box<Expr>,
+        left: Box<Expr<'src>>,
+        operator: Token<'src>,
+        right: Box<Expr<'src>>,
     },
     Call {
-        callee: Box<Expr>,
-        paren: Token,
-        arguments: Vec<Expr>,
+        callee: Box<Expr<'src>>,
+        paren: Token<'src>,
+        arguments: Vec<Expr<'src>>,
     },
     Get {
-        object: Box<Expr>,
-        name: Token,
+        object: Box<Expr<'src>>,
+        name: Token<'src>,
     },
     Grouping {
-        expression: Box<Expr>,
+        expression: Box<Expr<'src>>,
     },
     Literal {
         value: Literal,
     },
     Logical {
-        left: Box<Expr>,
-        operator: Token,
-        right: Box<Expr>,
+        left: Box<Expr<'src>>,
+        operator: Token<'src>,
+        right: Box<Expr<'src>>,
     },
     Set {
-        object: Box<Expr>,
-        name: Token,
-        value: Box<Expr>,
+        object: Box<Expr<'src>>,
+        name: Token<'src>,
+        value: Box<Expr<'src>>,
     },
     Super {
-        keyword: Token,
-        method: Token,
+        keyword: Token<'src>,
+        method: Token<'src>,
     },
     This {
-        keyword: Token,
+        keyword: Token<'src>,
     },
     Unary {
-        operator: Token,
-        right: Box<Expr>,
+        operator: Token<'src>,
+        right: Box<Expr<'src>>,
     },
     Variable {
-        name: Token,
+        name: Token<'src>,
     },
 }
