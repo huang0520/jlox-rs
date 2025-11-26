@@ -34,13 +34,7 @@ impl<'src> Expr<'src> {
                     TokenType::Star => Ok(Literal::Number(
                         TryInto::<f64>::try_into(left_lit)? * TryInto::<f64>::try_into(right_lit)?,
                     )),
-                    TokenType::Plus => match (left_lit, right_lit) {
-                        (Literal::Number(l), Literal::Number(r)) => Ok(Literal::Number(l + r)),
-                        (Literal::String(l), Literal::String(r)) => {
-                            Ok(Literal::String(format!("{l}{r}")))
-                        }
-                        _ => todo!(),
-                    },
+                    TokenType::Plus => Ok(self.handle_plus(&left_lit, &right_lit)?),
                     TokenType::Greater => Ok(Literal::Boolean(
                         TryInto::<f64>::try_into(left_lit)? > TryInto::<f64>::try_into(right_lit)?,
                     )),
@@ -57,6 +51,16 @@ impl<'src> Expr<'src> {
                     TokenType::BangEqual => Ok(Literal::Boolean(left_lit != right_lit)),
                     _ => unreachable!(),
                 }
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn handle_plus(&self, left: &Literal, right: &Literal) -> Result<Literal, TypeError> {
+        match (left, right) {
+            (Literal::Number(l), Literal::Number(r)) => Ok(Literal::Number(l + r)),
+            (Literal::String(_), _) | (_, Literal::String(_)) => {
+                Ok(Literal::String(format!("{}{}", left, right)))
             }
             _ => todo!(),
         }

@@ -10,10 +10,7 @@ pub enum Literal {
 
 impl Literal {
     pub fn into_truthy(self) -> bool {
-        match self {
-            Literal::Boolean(false) | Literal::Nil => false,
-            _ => true,
-        }
+        !matches!(self, Literal::Boolean(false) | Literal::Nil)
     }
 }
 
