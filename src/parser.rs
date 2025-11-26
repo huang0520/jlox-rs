@@ -1,44 +1,66 @@
+use std::fmt::Debug;
 use std::iter::Peekable;
 
-use crate::{expr::Expr, token::Token, token_type::TokenType};
+use crate::{expr::Expr, stmt::Stmt, token::Token, token_type::TokenType};
 
 pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
+    line: usize,
     tokens: Peekable<I>,
-    errors: Vec<ParseError>,
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     pub fn new(tokens: I) -> Self {
         Self {
+            line: 1,
             tokens: tokens.peekable(),
-            errors: Vec::new(),
         }
     }
-    pub fn parse(&mut self) -> Result<Expr<'src>, Vec<ParseError>> {
-        while self
-            .tokens
-            .peek()
-            .is_some_and(|t| t.token_type != TokenType::Eof)
-        {
-            match self.expression() {
-                Ok(expr) => {
-                    if self.errors.is_empty() {
-                        return Ok(*expr);
-                    }
-                }
-                Err(e) => {
-                    self.errors.push(e);
-                    self.sync();
-                }
+    pub fn parse(&mut self) -> Result<Vec<Stmt<'src>>, Vec<ParseError>> {
+        let mut statements = Vec::new();
+        let mut errors = Vec::new();
+
+        while self.peek().is_some_and(|t| t.token_type != TokenType::Eof) {
+            match self.statement() {
+                Ok(stmt) => statements.push(*stmt),
+                Err(e) => errors.push(e),
             }
         }
-        if self.errors.is_empty() {
-            Err(vec![ParseError::EmptyFile])
+
+        if errors.is_empty() {
+            Ok(statements)
         } else {
-            Err(self.errors.clone())
+            Err(errors)
         }
     }
 
+    // Statement
+    fn statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+        match self.peek().map(|t| t.token_type) {
+            Some(TokenType::Print) => {
+                self.advance();
+                self.print_statement()
+            }
+            _ => self.expression_statement(),
+        }
+    }
+
+    fn print_statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+        let expr = self.expression()?;
+        self.consume(TokenType::Semicolon, |line| ParseError::LackSemiColon {
+            line,
+        })?;
+        Ok(Box::new(Stmt::Print(*expr)))
+    }
+
+    fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+        let expr = self.expression()?;
+        self.consume(TokenType::Semicolon, |line| ParseError::LackSemiColon {
+            line,
+        })?;
+        Ok(Box::new(Stmt::Expression(*expr)))
+    }
+
+    // Expression
     fn expression(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
         self.equality()
     }
@@ -71,8 +93,8 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn unary(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
-        if let Some(TokenType::Bang | TokenType::Minus) = self.tokens.peek().map(|t| t.token_type) {
-            let operator = self.tokens.next().expect("operator exist").clone();
+        if let Some(TokenType::Bang | TokenType::Minus) = self.peek().map(|t| t.token_type) {
+            let operator = self.advance().expect("operator exist").clone();
             let right = self.unary()?;
             Ok(Box::new(Expr::Unary { operator, right }))
         } else {
@@ -81,7 +103,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn primary(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
-        let peek_token = self.tokens.peek();
+        let peek_token = self.peek();
         match peek_token.map(|t| t.token_type) {
             Some(
                 TokenType::True
@@ -91,31 +113,23 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 | TokenType::String,
             ) => Ok(Box::new(Expr::Literal {
                 value: self
-                    .tokens
-                    .next()
+                    .advance()
                     .expect("operator exist")
                     .literal
                     .expect("literal exist"),
             })),
             Some(TokenType::LeftParen) => {
-                self.tokens.next();
+                self.advance();
                 let expr = self.expression()?;
-                match self.tokens.peek() {
-                    Some(Token {
-                        token_type: TokenType::RightParen,
-                        ..
-                    }) => {
-                        self.tokens.next();
-                        Ok(Box::new(Expr::Grouping { expression: expr }))
-                    }
-                    Some(t) => Err(ParseError::LackRightParan { line: t.line }),
-                    None => unreachable!("shouldn't pass EOF token"),
-                }
+                self.consume(TokenType::RightParen, |line| ParseError::LackRightParan {
+                    line,
+                })?;
+                Ok(Box::new(Expr::Grouping { expression: expr }))
             }
             Some(_) => Err(ParseError::NotExpression {
                 line: peek_token.expect("token exist").line,
             }),
-            None => unreachable!("shouldn't pass EOF token"),
+            None => unreachable!("always a EOF token at the end"),
         }
     }
 
@@ -123,7 +137,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         while let Some(t) = self.tokens.peek() {
             match t.token_type {
                 TokenType::Semicolon => {
-                    self.tokens.next();
+                    self.advance();
                     break;
                 }
                 TokenType::Class
@@ -139,7 +153,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 }
 
                 _ => {
-                    self.tokens.next();
+                    self.advance();
                 }
             }
         }
@@ -156,12 +170,12 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     {
         let mut expr = parse_operand(self)?;
 
-        while let Some(token) = self.tokens.peek() {
+        while let Some(token) = self.peek() {
             if !operators.contains(&token.token_type) {
                 break;
             }
 
-            let operator = self.tokens.next().expect("operator exist");
+            let operator = self.advance().expect("operator exist");
             let right = parse_operand(self)?;
             expr = Box::new(Expr::Binary {
                 left: expr,
@@ -169,17 +183,38 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 right,
             });
         }
-
         Ok(expr)
+    }
+
+    fn peek(&mut self) -> Option<&Token<'src>> {
+        self.tokens.peek()
+    }
+
+    fn advance(&mut self) -> Option<Token<'src>> {
+        self.tokens.next().inspect(|t| self.line = t.line)
+    }
+
+    fn consume<F>(&mut self, match_type: TokenType, err_fn: F) -> Result<(), ParseError>
+    where
+        F: FnOnce(usize) -> ParseError,
+    {
+        match self.tokens.peek() {
+            Some(t) if t.token_type == match_type => {
+                self.advance();
+                Ok(())
+            }
+            Some(_) => Err(err_fn(self.line)),
+            None => unreachable!("always an EOF token"),
+        }
     }
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum ParseError {
+    #[error("expect ';' after value")]
+    LackSemiColon { line: usize },
     #[error("expect ')' after expression")]
     LackRightParan { line: usize },
     #[error("expect expression")]
     NotExpression { line: usize },
-    #[error("empty file")]
-    EmptyFile,
 }

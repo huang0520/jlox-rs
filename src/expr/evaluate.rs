@@ -3,7 +3,7 @@ use crate::literal::{Literal, TypeError};
 use crate::token_type::TokenType;
 
 impl<'src> Expr<'src> {
-    pub fn evaluate(&self) -> Result<Literal, RuntimeError> {
+    pub fn evaluate(&self) -> Result<Literal, ExprError> {
         match self {
             Expr::Literal { value } => Ok(value.clone()),
             Expr::Grouping { expression } => expression.evaluate(),
@@ -56,7 +56,7 @@ impl<'src> Expr<'src> {
         }
     }
 
-    fn handle_plus(&self, left: &Literal, right: &Literal) -> Result<Literal, TypeError> {
+    fn handle_plus(&self, left: &Literal, right: &Literal) -> Result<Literal, ExprError> {
         match (left, right) {
             (Literal::Number(l), Literal::Number(r)) => Ok(Literal::Number(l + r)),
             (Literal::String(_), _) | (_, Literal::String(_)) => {
@@ -68,7 +68,7 @@ impl<'src> Expr<'src> {
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
-pub enum RuntimeError {
+pub enum ExprError {
     #[error(transparent)]
-    LiteralError(#[from] TypeError),
+    Type(#[from] TypeError),
 }

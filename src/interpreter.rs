@@ -2,9 +2,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::expr::evaluate::RuntimeError;
 use crate::parser::{ParseError, Parser};
 use crate::scanner::{ScanError, Scanner};
+use crate::stmt::evaluate::StmtError;
 
 pub struct Lox {}
 
@@ -51,10 +51,12 @@ impl Lox {
 
     fn run(&self, source: &str) -> Result<(), RunError> {
         let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
-        let expr = Parser::new(tokens.into_iter().peekable())
+        let stmts = Parser::new(tokens.into_iter())
             .parse()
             .map_err(RunError::Parse)?;
-        println!("{}", expr.evaluate()?);
+        for stmt in stmts {
+            stmt.evaluate()?
+        }
         Ok(())
     }
 }
@@ -125,7 +127,7 @@ pub enum RunError {
     #[error("parse errors occurred:\n{}", format_parse_errors(.0))]
     Parse(Vec<ParseError>),
     #[error(transparent)]
-    Runtime(#[from] RuntimeError),
+    Runtime(#[from] StmtError),
 }
 
 fn format_scan_errors(errors: &[ScanError]) -> String {
@@ -146,7 +148,7 @@ fn format_parse_errors(errors: &[ParseError]) -> String {
         .map(|e| match e {
             ParseError::LackRightParan { line } => format!("  - line: {line}: {e}"),
             ParseError::NotExpression { line } => format!("  - line: {line}: {e}"),
-            _ => todo!(),
+            ParseError::LackSemiColon { line } => format!("  - line: {line}: {e}"),
         })
         .collect::<Vec<_>>()
         .join("\n")
