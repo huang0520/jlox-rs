@@ -2,14 +2,18 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::environment::Environment;
 use crate::parser::{ParseError, Parser};
 use crate::scanner::{ScanError, Scanner};
 use crate::stmt::evaluate::StmtError;
 
-pub struct Lox {}
+#[derive(Debug, Default)]
+pub struct Lox {
+    environment: Environment,
+}
 
 impl Lox {
-    pub fn execute(&self, args: &[String]) -> Result<(), LoxError> {
+    pub fn execute(&mut self, args: &[String]) -> Result<(), LoxError> {
         match args.len() {
             1 => self
                 .run_prompt()
@@ -21,14 +25,14 @@ impl Lox {
         }
     }
 
-    fn run_file(&self, path: impl AsRef<Path>) -> Result<(), RunFileError> {
+    fn run_file(&mut self, path: impl AsRef<Path>) -> Result<(), RunFileError> {
         let source = fs::read_to_string(&path)
             .map_err(|e| RunFileErrorKind::ReadFile(e).into_error(path.as_ref()))?;
         self.run(&source)
             .map_err(|e| RunFileErrorKind::Run(e).into_error(path.as_ref()))
     }
 
-    fn run_prompt(&self) -> Result<(), RunPromptError> {
+    fn run_prompt(&mut self) -> Result<(), RunPromptError> {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut buffer = String::new();
@@ -49,13 +53,11 @@ impl Lox {
         Ok(())
     }
 
-    fn run(&self, source: &str) -> Result<(), RunError> {
+    fn run(&mut self, source: &str) -> Result<(), RunError> {
         let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
-        let stmts = Parser::new(tokens.into_iter())
-            .parse()
-            .map_err(RunError::Parse)?;
+        let stmts = Parser::parse(tokens.into_iter()).map_err(RunError::Parse)?;
         for stmt in stmts {
-            stmt.evaluate()?
+            stmt.evaluate(&mut self.environment)?
         }
         Ok(())
     }
@@ -148,7 +150,9 @@ fn format_parse_errors(errors: &[ParseError]) -> String {
         .map(|e| match e {
             ParseError::LackRightParan { line } => format!("  - line: {line}: {e}"),
             ParseError::NotExpression { line } => format!("  - line: {line}: {e}"),
-            ParseError::LackSemiColon { line } => format!("  - line: {line}: {e}"),
+            ParseError::LackSemiColon { line, .. } => format!("  - line: {line}: {e}"),
+            ParseError::NotIdentifier { line } => format!("  - line: {line}: {e}"),
+            ParseError::InvalidAssignment { line } => format!("  -line: {line}: {e}"),
         })
         .collect::<Vec<_>>()
         .join("\n")

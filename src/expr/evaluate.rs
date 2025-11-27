@@ -1,14 +1,16 @@
+use crate::environment::{Environment, EnvironmentError};
 use crate::expr::Expr;
 use crate::literal::{Literal, TypeError};
 use crate::token_type::TokenType;
 
 impl<'src> Expr<'src> {
-    pub fn evaluate(&self) -> Result<Literal, ExprError> {
+    pub fn evaluate(&self, environment: &mut Environment) -> Result<Literal, ExprError> {
         match self {
+            Expr::Variable { name } => environment.get(name).map_err(ExprError::UndefinedVariable),
             Expr::Literal { value } => Ok(value.clone()),
-            Expr::Grouping { expression } => expression.evaluate(),
+            Expr::Grouping { expression } => expression.evaluate(environment),
             Expr::Unary { operator, right } => {
-                let right_lit = right.evaluate()?;
+                let right_lit = right.evaluate(environment)?;
 
                 match operator.token_type {
                     TokenType::Minus => Ok(Literal::Number(-right_lit.try_into()?)),
@@ -21,8 +23,8 @@ impl<'src> Expr<'src> {
                 operator,
                 right,
             } => {
-                let left_lit = left.evaluate()?;
-                let right_lit = right.evaluate()?;
+                let left_lit = left.evaluate(environment)?;
+                let right_lit = right.evaluate(environment)?;
 
                 match operator.token_type {
                     TokenType::Minus => Ok(Literal::Number(
@@ -52,6 +54,13 @@ impl<'src> Expr<'src> {
                     _ => unreachable!(),
                 }
             }
+            Expr::Assign { name, value } => {
+                let value = value.evaluate(environment)?;
+                environment
+                    .assign(name, value.clone())
+                    .map_err(ExprError::UndefinedVariable)?;
+                Ok(value)
+            }
             _ => todo!(),
         }
     }
@@ -71,4 +80,6 @@ impl<'src> Expr<'src> {
 pub enum ExprError {
     #[error(transparent)]
     Type(#[from] TypeError),
+    #[error(transparent)]
+    UndefinedVariable(EnvironmentError),
 }

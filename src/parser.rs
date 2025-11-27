@@ -1,28 +1,30 @@
 use std::fmt::Debug;
 use std::iter::Peekable;
 
-use crate::{expr::Expr, stmt::Stmt, token::Token, token_type::TokenType};
+use crate::{expr::Expr, literal::Literal, stmt::Stmt, token::Token, token_type::TokenType};
 
 pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
-    line: usize,
     tokens: Peekable<I>,
+    line: usize,
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
-    pub fn new(tokens: I) -> Self {
-        Self {
-            line: 1,
-            tokens: tokens.peekable(),
-        }
-    }
-    pub fn parse(&mut self) -> Result<Vec<Stmt<'src>>, Vec<ParseError>> {
+    pub fn parse(tokens: I) -> Result<Vec<Stmt<'src>>, Vec<ParseError>> {
         let mut statements = Vec::new();
         let mut errors = Vec::new();
 
-        while self.peek().is_some_and(|t| t.token_type != TokenType::Eof) {
-            match self.statement() {
+        let mut parser = Self {
+            tokens: tokens.peekable(),
+            line: 1,
+        };
+
+        while parser.peek().token_type != TokenType::Eof {
+            match parser.declaration() {
                 Ok(stmt) => statements.push(*stmt),
-                Err(e) => errors.push(e),
+                Err(e) => {
+                    errors.push(e);
+                    parser.sync();
+                }
             }
         }
 
@@ -33,36 +35,96 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         }
     }
 
+    // Declaration
+    fn declaration(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+        if self.next_if(TokenType::Var)?.is_some() {
+            self.var_declaration()
+        } else {
+            self.statement()
+        }
+    }
+
+    fn var_declaration(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+        let name = self.expect_next(
+            TokenType::Identifier,
+            ParseError::NotIdentifier { line: self.line },
+        )?;
+        let initializer = if self.next_if(TokenType::Equal)?.is_some() {
+            self.expression()?
+        } else {
+            Box::new(Expr::Literal {
+                value: Literal::Nil,
+            })
+        };
+        let _ = self.expect_next(
+            TokenType::Semicolon,
+            ParseError::LackSemiColon {
+                line: self.line,
+                after: "variable declaration",
+            },
+        )?;
+        Ok(Box::new(Stmt::Var {
+            name,
+            initializer: *initializer,
+        }))
+    }
+
     // Statement
     fn statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
-        match self.peek().map(|t| t.token_type) {
-            Some(TokenType::Print) => {
-                self.advance();
-                self.print_statement()
-            }
-            _ => self.expression_statement(),
+        if self.next_if(TokenType::Print)?.is_some() {
+            self.print_statement()
+        } else {
+            self.expression_statement()
         }
     }
 
     fn print_statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
         let expr = self.expression()?;
-        self.consume(TokenType::Semicolon, |line| ParseError::LackSemiColon {
-            line,
-        })?;
+        self.expect_next(
+            TokenType::Semicolon,
+            ParseError::LackSemiColon {
+                line: self.line,
+                after: "value",
+            },
+        )?;
         Ok(Box::new(Stmt::Print(*expr)))
     }
 
     fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
         let expr = self.expression()?;
-        self.consume(TokenType::Semicolon, |line| ParseError::LackSemiColon {
-            line,
-        })?;
+        self.expect_next(
+            TokenType::Semicolon,
+            ParseError::LackSemiColon {
+                line: self.line,
+                after: "value",
+            },
+        )?;
         Ok(Box::new(Stmt::Expression(*expr)))
     }
 
     // Expression
     fn expression(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
-        self.equality()
+        self.assignment()
+    }
+
+    fn assignment(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+        let expr = self.equality()?;
+
+        // If next token is '=' -> Assign value
+        if self.next_if(TokenType::Equal)?.is_some() {
+            let value = self.assignment()?;
+
+            if let Expr::Variable { name } = expr.as_ref() {
+                Ok(Box::new(Expr::Assign {
+                    name: name.clone(),
+                    value,
+                }))
+            } else {
+                Err(ParseError::InvalidAssignment { line: self.line })
+            }
+        } else {
+            Ok(expr)
+        }
     }
 
     fn equality(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
@@ -93,51 +155,46 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn unary(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
-        if let Some(TokenType::Bang | TokenType::Minus) = self.peek().map(|t| t.token_type) {
-            let operator = self.advance().expect("operator exist").clone();
-            let right = self.unary()?;
-            Ok(Box::new(Expr::Unary { operator, right }))
+        if matches!(self.peek().token_type, TokenType::Bang | TokenType::Minus) {
+            Ok(Box::new(Expr::Unary {
+                operator: self.next_token().clone(),
+                right: self.unary()?,
+            }))
         } else {
             self.primary()
         }
     }
 
     fn primary(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
-        let peek_token = self.peek();
-        match peek_token.map(|t| t.token_type) {
-            Some(
-                TokenType::True
-                | TokenType::False
-                | TokenType::Nil
-                | TokenType::Number
-                | TokenType::String,
-            ) => Ok(Box::new(Expr::Literal {
-                value: self
-                    .advance()
-                    .expect("operator exist")
-                    .literal
-                    .expect("literal exist"),
+        match self.peek().token_type {
+            TokenType::True
+            | TokenType::False
+            | TokenType::Nil
+            | TokenType::Number
+            | TokenType::String => Ok(Box::new(Expr::Literal {
+                value: self.next_token().literal.expect("literal exist"),
             })),
-            Some(TokenType::LeftParen) => {
-                self.advance();
+            TokenType::LeftParen => {
+                self.next_token();
                 let expr = self.expression()?;
-                self.consume(TokenType::RightParen, |line| ParseError::LackRightParan {
-                    line,
-                })?;
+                self.expect_next(
+                    TokenType::RightParen,
+                    ParseError::LackRightParan { line: self.line },
+                )?;
                 Ok(Box::new(Expr::Grouping { expression: expr }))
             }
-            Some(_) => Err(ParseError::NotExpression {
-                line: peek_token.expect("token exist").line,
-            }),
-            None => unreachable!("always a EOF token at the end"),
+            TokenType::Identifier => Ok(Box::new(Expr::Variable {
+                name: self.next_token(),
+            })),
+            _ => Err(ParseError::NotExpression { line: self.line }),
         }
     }
 
     fn sync(&mut self) {
-        while let Some(t) = self.tokens.peek() {
-            match t.token_type {
+        loop {
+            match self.peek().token_type {
                 TokenType::Semicolon => {
-                    self.advance();
+                    self.next_token();
                     break;
                 }
                 TokenType::Class
@@ -153,7 +210,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 }
 
                 _ => {
-                    self.advance();
+                    self.next_token();
                 }
             }
         }
@@ -162,20 +219,16 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     // Helper function
     fn parse_binary_op<F>(
         &mut self,
-        mut parse_operand: F,
+        parse_operand: F,
         operators: &[TokenType],
     ) -> Result<Box<Expr<'src>>, ParseError>
     where
-        F: FnMut(&mut Self) -> Result<Box<Expr<'src>>, ParseError>,
+        F: Fn(&mut Self) -> Result<Box<Expr<'src>>, ParseError>,
     {
         let mut expr = parse_operand(self)?;
 
-        while let Some(token) = self.peek() {
-            if !operators.contains(&token.token_type) {
-                break;
-            }
-
-            let operator = self.advance().expect("operator exist");
+        while operators.contains(&self.peek().token_type) {
+            let operator = self.next_token();
             let right = parse_operand(self)?;
             expr = Box::new(Expr::Binary {
                 left: expr,
@@ -186,24 +239,37 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         Ok(expr)
     }
 
-    fn peek(&mut self) -> Option<&Token<'src>> {
-        self.tokens.peek()
+    fn peek(&mut self) -> &Token<'src> {
+        self.tokens.peek().expect("always an EOF token")
     }
 
-    fn advance(&mut self) -> Option<Token<'src>> {
-        self.tokens.next().inspect(|t| self.line = t.line)
+    fn next_token(&mut self) -> Token<'src> {
+        self.tokens
+            .next()
+            .inspect(|t| self.line = t.line)
+            .expect("always an EOF token")
     }
 
-    fn consume<F>(&mut self, match_type: TokenType, err_fn: F) -> Result<(), ParseError>
-    where
-        F: FnOnce(usize) -> ParseError,
-    {
+    /// Advance iterator when match and return matched token
+    /// return None if not match
+    fn next_if(&mut self, match_type: TokenType) -> Result<Option<Token<'src>>, ParseError> {
         match self.tokens.peek() {
-            Some(t) if t.token_type == match_type => {
-                self.advance();
-                Ok(())
-            }
-            Some(_) => Err(err_fn(self.line)),
+            Some(t) if t.token_type == match_type => Ok(Some(self.next_token())),
+            Some(_) => Ok(None),
+            None => unreachable!("always an EOF token"),
+        }
+    }
+
+    /// Advance iterator when next token match expect type
+    /// Return given Err if not match
+    fn expect_next(
+        &mut self,
+        match_type: TokenType,
+        err: ParseError,
+    ) -> Result<Token<'src>, ParseError> {
+        match self.tokens.peek() {
+            Some(t) if t.token_type == match_type => Ok(self.next_token()),
+            Some(_) => Err(err),
             None => unreachable!("always an EOF token"),
         }
     }
@@ -211,10 +277,14 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum ParseError {
-    #[error("expect ';' after value")]
-    LackSemiColon { line: usize },
+    #[error("expect ';' after {after}")]
+    LackSemiColon { line: usize, after: &'static str },
     #[error("expect ')' after expression")]
     LackRightParan { line: usize },
+    #[error("expect variable name")]
+    NotIdentifier { line: usize },
     #[error("expect expression")]
     NotExpression { line: usize },
+    #[error("invalid assignment target")]
+    InvalidAssignment { line: usize },
 }
