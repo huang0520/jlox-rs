@@ -1,4 +1,3 @@
-pub mod evaluate;
 pub mod print;
 
 use crate::literal::Literal;

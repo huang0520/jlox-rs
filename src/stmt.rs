@@ -1,5 +1,3 @@
-pub mod evaluate;
-
 use crate::{expr::Expr, token::Token};
 
 #[derive(Debug, PartialEq)]

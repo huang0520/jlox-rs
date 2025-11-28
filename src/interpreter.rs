@@ -2,10 +2,13 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::environment::Environment;
+use crate::environment::{Environment, EnvironmentError};
+use crate::expr::Expr;
+use crate::literal::{Literal, TypeError};
 use crate::parser::{ParseError, Parser};
 use crate::scanner::{ScanError, Scanner};
-use crate::stmt::evaluate::StmtError;
+use crate::stmt::Stmt;
+use crate::token_type::TokenType;
 
 #[derive(Debug, Default)]
 pub struct Lox {
@@ -57,9 +60,108 @@ impl Lox {
         let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
         let stmts = Parser::parse(tokens.into_iter()).map_err(RunError::Parse)?;
         for stmt in stmts {
-            stmt.evaluate(&mut self.environment)?
+            self.evaluate_stmt(&stmt).map_err(RunError::Runtime)?;
         }
         Ok(())
+    }
+
+    fn evaluate_stmt(&mut self, statement: &Stmt) -> Result<(), RuntimeError> {
+        match statement {
+            Stmt::Expression(expr) => {
+                self.evaluate_expr(expr)?;
+                Ok(())
+            }
+            Stmt::Print(expr) => {
+                println!("{}", self.evaluate_expr(expr)?);
+                Ok(())
+            }
+            Stmt::Var { name, initializer } => {
+                let value = self.evaluate_expr(initializer)?;
+                self.environment.define(name, value);
+                Ok(())
+            }
+        }
+    }
+
+    fn evaluate_expr(&mut self, expression: &Expr) -> Result<Literal, RuntimeError> {
+        match expression {
+            Expr::Variable { name } => {
+                self.environment
+                    .get(name)
+                    .map_err(|e| RuntimeError::UndefinedVariable {
+                        line: name.line,
+                        source: e,
+                    })
+            }
+            Expr::Literal { value } => Ok(value.clone()),
+            Expr::Grouping { expression } => self.evaluate_expr(expression),
+            Expr::Unary { operator, right } => {
+                let right_lit = self.evaluate_expr(right)?;
+
+                match operator.token_type {
+                    TokenType::Minus => Ok(Literal::Number(-right_lit.try_into()?)),
+                    TokenType::Bang => Ok(Literal::Boolean(!right_lit.into_truthy())),
+                    _ => unreachable!("only minus and bang are unary operator"),
+                }
+            }
+            Expr::Binary {
+                left,
+                operator,
+                right,
+            } => {
+                let left_lit = self.evaluate_expr(left)?;
+                let right_lit = self.evaluate_expr(right)?;
+
+                match operator.token_type {
+                    TokenType::Minus => Ok(Literal::Number(
+                        TryInto::<f64>::try_into(left_lit)? - TryInto::<f64>::try_into(right_lit)?,
+                    )),
+                    TokenType::Slash => Ok(Literal::Number(
+                        TryInto::<f64>::try_into(left_lit)? / TryInto::<f64>::try_into(right_lit)?,
+                    )),
+                    TokenType::Star => Ok(Literal::Number(
+                        TryInto::<f64>::try_into(left_lit)? * TryInto::<f64>::try_into(right_lit)?,
+                    )),
+                    TokenType::Plus => Ok(self.handle_plus(&left_lit, &right_lit)?),
+                    TokenType::Greater => Ok(Literal::Boolean(
+                        TryInto::<f64>::try_into(left_lit)? > TryInto::<f64>::try_into(right_lit)?,
+                    )),
+                    TokenType::GreaterEqual => Ok(Literal::Boolean(
+                        TryInto::<f64>::try_into(left_lit)? >= TryInto::<f64>::try_into(right_lit)?,
+                    )),
+                    TokenType::Less => Ok(Literal::Boolean(
+                        TryInto::<f64>::try_into(left_lit)? < TryInto::<f64>::try_into(right_lit)?,
+                    )),
+                    TokenType::LessEqual => Ok(Literal::Boolean(
+                        TryInto::<f64>::try_into(left_lit)? <= TryInto::<f64>::try_into(right_lit)?,
+                    )),
+                    TokenType::EqualEqual => Ok(Literal::Boolean(left_lit == right_lit)),
+                    TokenType::BangEqual => Ok(Literal::Boolean(left_lit != right_lit)),
+                    _ => unreachable!(),
+                }
+            }
+            Expr::Assign { name, value } => {
+                let value = self.evaluate_expr(value)?;
+                self.environment.assign(name, value.clone()).map_err(|e| {
+                    RuntimeError::UndefinedVariable {
+                        line: name.line,
+                        source: e,
+                    }
+                })?;
+                Ok(value)
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn handle_plus(&self, left: &Literal, right: &Literal) -> Result<Literal, RuntimeError> {
+        match (left, right) {
+            (Literal::Number(l), Literal::Number(r)) => Ok(Literal::Number(l + r)),
+            (Literal::String(_), _) | (_, Literal::String(_)) => {
+                Ok(Literal::String(format!("{}{}", left, right)))
+            }
+            _ => todo!(),
+        }
     }
 }
 
@@ -128,8 +230,19 @@ pub enum RunError {
     Scan(Vec<ScanError>),
     #[error("parse errors occurred:\n{}", format_parse_errors(.0))]
     Parse(Vec<ParseError>),
+    #[error("runtime errors occured:\n{0}")]
+    Runtime(RuntimeError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeError {
+    #[error("  - line: {line}: {source}")]
+    UndefinedVariable {
+        line: usize,
+        source: EnvironmentError,
+    },
     #[error(transparent)]
-    Runtime(#[from] StmtError),
+    Type(#[from] TypeError),
 }
 
 fn format_scan_errors(errors: &[ScanError]) -> String {
