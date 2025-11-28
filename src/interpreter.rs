@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::environment::{Environment, EnvironmentError};
+use crate::environment::{EnvironmentError, Environments};
 use crate::expr::Expr;
 use crate::literal::{Literal, TypeError};
 use crate::parser::{ParseError, Parser};
@@ -10,12 +10,18 @@ use crate::scanner::{ScanError, Scanner};
 use crate::stmt::Stmt;
 use crate::token_type::TokenType;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Lox {
-    environment: Environment,
+    environments: Environments,
 }
 
 impl Lox {
+    pub fn new() -> Self {
+        Self {
+            environments: Environments::new(),
+        }
+    }
+
     pub fn execute(&mut self, args: &[String]) -> Result<(), LoxError> {
         match args.len() {
             1 => self
@@ -77,7 +83,7 @@ impl Lox {
             }
             Stmt::Var { name, initializer } => {
                 let value = self.evaluate_expr(initializer)?;
-                self.environment.define(name, value);
+                self.environments.define_value(name, value);
                 Ok(())
             }
         }
@@ -86,8 +92,8 @@ impl Lox {
     fn evaluate_expr(&mut self, expression: &Expr) -> Result<Literal, RuntimeError> {
         match expression {
             Expr::Variable { name } => {
-                self.environment
-                    .get(name)
+                self.environments
+                    .get_value(name)
                     .map_err(|e| RuntimeError::UndefinedVariable {
                         line: name.line,
                         source: e,
@@ -142,12 +148,12 @@ impl Lox {
             }
             Expr::Assign { name, value } => {
                 let value = self.evaluate_expr(value)?;
-                self.environment.assign(name, value.clone()).map_err(|e| {
-                    RuntimeError::UndefinedVariable {
+                self.environments
+                    .assign_value(name, value.clone())
+                    .map_err(|e| RuntimeError::UndefinedVariable {
                         line: name.line,
                         source: e,
-                    }
-                })?;
+                    })?;
                 Ok(value)
             }
             _ => todo!(),

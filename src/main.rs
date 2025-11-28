@@ -17,7 +17,7 @@ use crate::interpreter::LoxErrorKind;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let mut lox = Lox::default();
+    let mut lox = Lox::new();
     if let Err(e) = lox.execute(&args) {
         let exitcode = match e.source {
             LoxErrorKind::InvalidArguments => ExitCode::from(64),
