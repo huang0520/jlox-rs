@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": ["rustup@latest", "libiconv@latest"],
+  "shell": {
+    "init_hook": [
+      "mkdir -p \"$RUSTUP_HOME\"",
+      "rustup default stable",
+      "cargo fetch"
+    ],
+    "scripts": {
+      "build": "cargo build",
+      "test": "cargo test -- --show-output"
+    }
+  }
+}

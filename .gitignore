@@ -1,1 +1,4 @@
+/.rustup
+/.devbox
+
 /target
