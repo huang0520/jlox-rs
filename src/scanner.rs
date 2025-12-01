@@ -272,13 +272,13 @@ impl<'src> Scanner<'src> {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum ScanError {
-    #[error("unexpected character '{found}'")]
+    #[error("line {line}: unexpected character '{found}'")]
     UnexpectedChar { found: char, line: usize },
 
-    #[error("unterminated string")]
+    #[error("line {line}: unterminated string")]
     UnterminatedString { line: usize },
 
-    #[error("unterminated comment block")]
+    #[error("line {line}: unterminated comment block")]
     UnterminatedCommentBlock { line: usize },
 }
 

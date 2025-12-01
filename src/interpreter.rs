@@ -130,6 +130,18 @@ impl Lox {
                 self.environments.pop_local();
                 Ok(())
             }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                if self.evaluate_expr(condition)?.into_truthy() {
+                    self.evaluate_stmt(then_branch, environment_idx)?;
+                } else if let Some(stmt) = else_branch {
+                    self.evaluate_stmt(stmt, environment_idx)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -199,6 +211,21 @@ impl Lox {
                         source: e,
                     })?;
                 Ok(value)
+            }
+            Expr::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                let left = self.evaluate_expr(left)?;
+                if operator.token_type == TokenType::Or {
+                    if left.is_truthy() {
+                        return Ok(left);
+                    }
+                } else if !left.is_truthy() {
+                    return Ok(left);
+                }
+                self.evaluate_expr(right)
             }
             _ => todo!(),
         }
@@ -276,9 +303,9 @@ pub enum RunPromptError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
-    #[error("scan errors occurred:\n{}", format_scan_errors(.0))]
+    #[error("scan errors occurred:\n{}", format_errors(.0))]
     Scan(Vec<ScanError>),
-    #[error("parse errors occurred:\n{}", format_parse_errors(.0))]
+    #[error("parse errors occurred:\n{}", format_errors(.0))]
     Parse(Vec<ParseError>),
     #[error("runtime errors occured:\n{0}")]
     Runtime(RuntimeError),
@@ -295,29 +322,10 @@ pub enum RuntimeError {
     Type(#[from] TypeError),
 }
 
-fn format_scan_errors(errors: &[ScanError]) -> String {
+fn format_errors<T: std::fmt::Display>(errors: &[T]) -> String {
     errors
         .iter()
-        .map(|e| match e {
-            ScanError::UnexpectedChar { line, .. } => format!("  - line: {line}: {e}"),
-            ScanError::UnterminatedCommentBlock { line } => format!("  - line: {line}: {e}"),
-            ScanError::UnterminatedString { line } => format!("  - line: {line}: {e}"),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn format_parse_errors(errors: &[ParseError]) -> String {
-    errors
-        .iter()
-        .map(|e| match e {
-            ParseError::LackRightParan { line } => format!("  - line: {line}: {e}"),
-            ParseError::NotExpression { line } => format!("  - line: {line}: {e}"),
-            ParseError::LackSemiColon { line, .. } => format!("  - line: {line}: {e}"),
-            ParseError::NotIdentifier { line } => format!("  - line: {line}: {e}"),
-            ParseError::InvalidAssignment { line } => format!("  - line: {line}: {e}"),
-            ParseError::LackRightBrace { line } => format!("  - line: {line}: {e}"),
-        })
+        .map(|e| format!("  - {e}"))
         .collect::<Vec<_>>()
         .join("\n")
 }

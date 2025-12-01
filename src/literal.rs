@@ -12,6 +12,10 @@ impl Literal {
     pub fn into_truthy(self) -> bool {
         !matches!(self, Literal::Boolean(false) | Literal::Nil)
     }
+
+    pub fn is_truthy(&self) -> bool {
+        !matches!(self, Literal::Boolean(false) | Literal::Nil)
+    }
 }
 
 impl TryFrom<Literal> for f64 {

@@ -52,7 +52,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         while parser.peek().token_type != TokenType::Eof {
             let result = match parser.peek().token_type {
                 // Check is statement
-                TokenType::Var | TokenType::Print | TokenType::LeftBrace => {
+                TokenType::Var | TokenType::Print | TokenType::LeftBrace | TokenType::If => {
                     parser.declaration().map(|stmt| REPLResult::Stmt(*stmt))
                 }
                 _ => parser.expression().and_then(|expr| {
@@ -123,6 +123,10 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 self.next_token();
                 self.block_statement()
             }
+            TokenType::If => {
+                self.next_token();
+                self.if_statement()
+            }
             _ => self.expression_statement(),
         }
     }
@@ -152,6 +156,37 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         Ok(Box::new(Stmt::Block(statements)))
     }
 
+    fn if_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        self.expect_next(
+            TokenType::LeftParen,
+            E::LackLeftParam {
+                line: self.line,
+                after: "'if'",
+            },
+        )?;
+        let condition = *self.expression()?;
+        self.expect_next(
+            TokenType::RightParen,
+            E::LackRightParan {
+                line: self.line,
+                after: "if condition",
+            },
+        )?;
+
+        let then_branch = self.statement()?;
+        let else_branch = if self.next_if(TokenType::Else)?.is_some() {
+            Some(self.statement()?)
+        } else {
+            None
+        };
+
+        Ok(Box::new(Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        }))
+    }
+
     fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         let expr = self.expression()?;
         self.expect_next(
@@ -170,7 +205,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn assignment(&mut self) -> Result<Box<Expr<'src>>> {
-        let expr = self.equality()?;
+        let expr = self.logic_or()?;
 
         // If next token is '=' -> Assign value
         if self.next_if(TokenType::Equal)?.is_some() {
@@ -187,6 +222,32 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         } else {
             Ok(expr)
         }
+    }
+
+    fn logic_or(&mut self) -> Result<Box<Expr<'src>>> {
+        let mut expr = self.logic_and()?;
+        while let Some(operator) = self.next_if(TokenType::Or)? {
+            let right = self.logic_and()?;
+            expr = Box::new(Expr::Logical {
+                left: expr,
+                operator,
+                right,
+            });
+        }
+        Ok(expr)
+    }
+
+    fn logic_and(&mut self) -> Result<Box<Expr<'src>>> {
+        let mut expr = self.equality()?;
+        while let Some(operator) = self.next_if(TokenType::And)? {
+            let right = self.equality()?;
+            expr = Box::new(Expr::Logical {
+                left: expr,
+                operator,
+                right,
+            });
+        }
+        Ok(expr)
     }
 
     fn equality(&mut self) -> Result<Box<Expr<'src>>> {
@@ -239,7 +300,13 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             TokenType::LeftParen => {
                 self.next_token();
                 let expr = self.expression()?;
-                self.expect_next(TokenType::RightParen, E::LackRightParan { line: self.line })?;
+                self.expect_next(
+                    TokenType::RightParen,
+                    E::LackRightParan {
+                        line: self.line,
+                        after: "expression",
+                    },
+                )?;
                 Ok(Box::new(Expr::Grouping { expression: expr }))
             }
             TokenType::Identifier => Ok(Box::new(Expr::Variable {
@@ -332,16 +399,18 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum ParseError {
-    #[error("expect ';' after {after}")]
+    #[error("line {line}: expect ';' after {after}")]
     LackSemiColon { line: usize, after: &'static str },
-    #[error("expect ')' after expression")]
-    LackRightParan { line: usize },
-    #[error("expect '}}' after block")]
+    #[error("line {line}: expect '(' after {after}")]
+    LackLeftParam { line: usize, after: &'static str },
+    #[error("line {line}: expect ')' after {after}")]
+    LackRightParan { line: usize, after: &'static str },
+    #[error("line {line}: expect '}}' after block")]
     LackRightBrace { line: usize },
-    #[error("expect variable name")]
+    #[error("line {line}: expect variable name")]
     NotIdentifier { line: usize },
-    #[error("expect expression")]
+    #[error("line {line}: expect expression")]
     NotExpression { line: usize },
-    #[error("invalid assignment target")]
+    #[error("line {line}: invalid assignment target")]
     InvalidAssignment { line: usize },
 }
