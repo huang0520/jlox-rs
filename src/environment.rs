@@ -7,7 +7,7 @@ pub type EnvironmentIndex = usize;
 
 #[derive(Debug)]
 pub struct Environment {
-    parent_index: Option<EnvironmentIndex>,
+    pub parent_index: Option<EnvironmentIndex>,
     values: HashMap<String, Literal>,
 }
 
@@ -55,6 +55,8 @@ pub struct Environments {
 }
 
 impl Environments {
+    pub const GLOBAL_INDEX: EnvironmentIndex = 0;
+
     pub fn new() -> Self {
         let mut arena = Self {
             environments: Vec::new(),

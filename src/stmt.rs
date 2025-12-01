@@ -8,4 +8,5 @@ pub enum Stmt<'src> {
         name: Token<'src>,
         initializer: Expr<'src>,
     },
+    Block(Vec<Stmt<'src>>),
 }

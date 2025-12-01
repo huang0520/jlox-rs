@@ -2,6 +2,9 @@ use std::fmt::Debug;
 use std::iter::Peekable;
 
 use crate::{expr::Expr, literal::Literal, stmt::Stmt, token::Token, token_type::TokenType};
+use ParseError as E;
+
+type Result<T> = std::result::Result<T, ParseError>;
 
 pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
     tokens: Peekable<I>,
@@ -9,7 +12,7 @@ pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
-    pub fn parse(tokens: I) -> Result<Vec<Stmt<'src>>, Vec<ParseError>> {
+    pub fn parse(tokens: I) -> std::result::Result<Vec<Stmt<'src>>, Vec<ParseError>> {
         let mut statements = Vec::new();
         let mut errors = Vec::new();
 
@@ -36,7 +39,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     // Declaration
-    fn declaration(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+    fn declaration(&mut self) -> Result<Box<Stmt<'src>>> {
         if self.next_if(TokenType::Var)?.is_some() {
             self.var_declaration()
         } else {
@@ -44,11 +47,8 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         }
     }
 
-    fn var_declaration(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
-        let name = self.expect_next(
-            TokenType::Identifier,
-            ParseError::NotIdentifier { line: self.line },
-        )?;
+    fn var_declaration(&mut self) -> Result<Box<Stmt<'src>>> {
+        let name = self.expect_next(TokenType::Identifier, E::NotIdentifier { line: self.line })?;
         let initializer = if self.next_if(TokenType::Equal)?.is_some() {
             self.expression()?
         } else {
@@ -58,7 +58,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         };
         let _ = self.expect_next(
             TokenType::Semicolon,
-            ParseError::LackSemiColon {
+            E::LackSemiColon {
                 line: self.line,
                 after: "variable declaration",
             },
@@ -70,19 +70,25 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     // Statement
-    fn statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
-        if self.next_if(TokenType::Print)?.is_some() {
-            self.print_statement()
-        } else {
-            self.expression_statement()
+    fn statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        match self.peek().token_type {
+            TokenType::Print => {
+                self.next_token();
+                self.print_statement()
+            }
+            TokenType::LeftBrace => {
+                self.next_token();
+                self.block_statement()
+            }
+            _ => self.expression_statement(),
         }
     }
 
-    fn print_statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+    fn print_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         let expr = self.expression()?;
         self.expect_next(
             TokenType::Semicolon,
-            ParseError::LackSemiColon {
+            E::LackSemiColon {
                 line: self.line,
                 after: "value",
             },
@@ -90,11 +96,11 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         Ok(Box::new(Stmt::Print(*expr)))
     }
 
-    fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>, ParseError> {
+    fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         let expr = self.expression()?;
         self.expect_next(
             TokenType::Semicolon,
-            ParseError::LackSemiColon {
+            E::LackSemiColon {
                 line: self.line,
                 after: "value",
             },
@@ -102,12 +108,25 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         Ok(Box::new(Stmt::Expression(*expr)))
     }
 
+    fn block_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        let mut statements: Vec<Stmt<'_>> = Vec::new();
+        while !matches!(
+            self.peek().token_type,
+            TokenType::RightBrace | TokenType::Eof
+        ) {
+            statements.push(*self.declaration()?);
+        }
+
+        self.expect_next(TokenType::RightBrace, E::LackRightBrace { line: self.line })?;
+        Ok(Box::new(Stmt::Block(statements)))
+    }
+
     // Expression
-    fn expression(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn expression(&mut self) -> Result<Box<Expr<'src>>> {
         self.assignment()
     }
 
-    fn assignment(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn assignment(&mut self) -> Result<Box<Expr<'src>>> {
         let expr = self.equality()?;
 
         // If next token is '=' -> Assign value
@@ -120,21 +139,21 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                     value,
                 }))
             } else {
-                Err(ParseError::InvalidAssignment { line: self.line })
+                Err(E::InvalidAssignment { line: self.line })
             }
         } else {
             Ok(expr)
         }
     }
 
-    fn equality(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn equality(&mut self) -> Result<Box<Expr<'src>>> {
         self.parse_binary_op(
             |p| p.comparison(),
             &[TokenType::BangEqual, TokenType::EqualEqual],
         )
     }
 
-    fn comparison(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn comparison(&mut self) -> Result<Box<Expr<'src>>> {
         self.parse_binary_op(
             |p| p.term(),
             &[
@@ -146,15 +165,15 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         )
     }
 
-    fn term(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn term(&mut self) -> Result<Box<Expr<'src>>> {
         self.parse_binary_op(|p| p.factor(), &[TokenType::Minus, TokenType::Plus])
     }
 
-    fn factor(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn factor(&mut self) -> Result<Box<Expr<'src>>> {
         self.parse_binary_op(|p| p.unary(), &[TokenType::Slash, TokenType::Star])
     }
 
-    fn unary(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn unary(&mut self) -> Result<Box<Expr<'src>>> {
         if matches!(self.peek().token_type, TokenType::Bang | TokenType::Minus) {
             Ok(Box::new(Expr::Unary {
                 operator: self.next_token().clone(),
@@ -165,7 +184,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         }
     }
 
-    fn primary(&mut self) -> Result<Box<Expr<'src>>, ParseError> {
+    fn primary(&mut self) -> Result<Box<Expr<'src>>> {
         match self.peek().token_type {
             TokenType::True
             | TokenType::False
@@ -177,16 +196,13 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             TokenType::LeftParen => {
                 self.next_token();
                 let expr = self.expression()?;
-                self.expect_next(
-                    TokenType::RightParen,
-                    ParseError::LackRightParan { line: self.line },
-                )?;
+                self.expect_next(TokenType::RightParen, E::LackRightParan { line: self.line })?;
                 Ok(Box::new(Expr::Grouping { expression: expr }))
             }
             TokenType::Identifier => Ok(Box::new(Expr::Variable {
                 name: self.next_token(),
             })),
-            _ => Err(ParseError::NotExpression { line: self.line }),
+            _ => Err(E::NotExpression { line: self.line }),
         }
     }
 
@@ -221,9 +237,9 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         &mut self,
         parse_operand: F,
         operators: &[TokenType],
-    ) -> Result<Box<Expr<'src>>, ParseError>
+    ) -> Result<Box<Expr<'src>>>
     where
-        F: Fn(&mut Self) -> Result<Box<Expr<'src>>, ParseError>,
+        F: Fn(&mut Self) -> Result<Box<Expr<'src>>>,
     {
         let mut expr = parse_operand(self)?;
 
@@ -252,7 +268,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     /// Advance iterator when match and return matched token
     /// return None if not match
-    fn next_if(&mut self, match_type: TokenType) -> Result<Option<Token<'src>>, ParseError> {
+    fn next_if(&mut self, match_type: TokenType) -> Result<Option<Token<'src>>> {
         match self.tokens.peek() {
             Some(t) if t.token_type == match_type => Ok(Some(self.next_token())),
             Some(_) => Ok(None),
@@ -262,11 +278,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     /// Advance iterator when next token match expect type
     /// Return given Err if not match
-    fn expect_next(
-        &mut self,
-        match_type: TokenType,
-        err: ParseError,
-    ) -> Result<Token<'src>, ParseError> {
+    fn expect_next(&mut self, match_type: TokenType, err: ParseError) -> Result<Token<'src>> {
         match self.tokens.peek() {
             Some(t) if t.token_type == match_type => Ok(self.next_token()),
             Some(_) => Err(err),
@@ -281,6 +293,8 @@ pub enum ParseError {
     LackSemiColon { line: usize, after: &'static str },
     #[error("expect ')' after expression")]
     LackRightParan { line: usize },
+    #[error("expect '}}' after block")]
+    LackRightBrace { line: usize },
     #[error("expect variable name")]
     NotIdentifier { line: usize },
     #[error("expect expression")]

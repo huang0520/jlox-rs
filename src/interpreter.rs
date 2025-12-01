@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::environment::{EnvironmentError, Environments};
+use crate::environment::{EnvironmentError, EnvironmentIndex, Environments};
 use crate::expr::Expr;
 use crate::literal::{Literal, TypeError};
 use crate::parser::{ParseError, Parser};
@@ -66,12 +66,17 @@ impl Lox {
         let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
         let stmts = Parser::parse(tokens.into_iter()).map_err(RunError::Parse)?;
         for stmt in stmts {
-            self.evaluate_stmt(&stmt).map_err(RunError::Runtime)?;
+            self.evaluate_stmt(&stmt, Environments::GLOBAL_INDEX)
+                .map_err(RunError::Runtime)?;
         }
         Ok(())
     }
 
-    fn evaluate_stmt(&mut self, statement: &Stmt) -> Result<(), RuntimeError> {
+    fn evaluate_stmt(
+        &mut self,
+        statement: &Stmt,
+        environment_idx: EnvironmentIndex,
+    ) -> Result<(), RuntimeError> {
         match statement {
             Stmt::Expression(expr) => {
                 self.evaluate_expr(expr)?;
@@ -84,6 +89,17 @@ impl Lox {
             Stmt::Var { name, initializer } => {
                 let value = self.evaluate_expr(initializer)?;
                 self.environments.define_value(name, value);
+                Ok(())
+            }
+            Stmt::Block(statements) => {
+                let new_idx = self.environments.create_local(environment_idx);
+                for stmt in statements {
+                    if let Err(e) = self.evaluate_stmt(stmt, new_idx) {
+                        self.environments.pop_local();
+                        return Err(e);
+                    }
+                }
+                self.environments.pop_local();
                 Ok(())
             }
         }
@@ -271,7 +287,8 @@ fn format_parse_errors(errors: &[ParseError]) -> String {
             ParseError::NotExpression { line } => format!("  - line: {line}: {e}"),
             ParseError::LackSemiColon { line, .. } => format!("  - line: {line}: {e}"),
             ParseError::NotIdentifier { line } => format!("  - line: {line}: {e}"),
-            ParseError::InvalidAssignment { line } => format!("  -line: {line}: {e}"),
+            ParseError::InvalidAssignment { line } => format!("  - line: {line}: {e}"),
+            ParseError::LackRightBrace { line } => format!("  - line: {line}: {e}"),
         })
         .collect::<Vec<_>>()
         .join("\n")
