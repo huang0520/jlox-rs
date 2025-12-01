@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::environment::{EnvironmentError, EnvironmentIndex, Environments};
 use crate::expr::Expr;
 use crate::literal::{Literal, TypeError};
-use crate::parser::{ParseError, Parser};
+use crate::parser::{ParseError, Parser, REPLResult};
 use crate::scanner::{ScanError, Scanner};
 use crate::stmt::Stmt;
 use crate::token_type::TokenType;
@@ -56,7 +56,9 @@ impl Lox {
             if buffer.trim().is_empty() {
                 break;
             };
-            let _ = self.run(buffer.trim()).inspect_err(|e| eprintln!("{e}"));
+            let _ = self
+                .run_repl(buffer.trim())
+                .inspect_err(|e| eprintln!("{e}"));
             buffer.clear();
         }
         Ok(())
@@ -64,10 +66,36 @@ impl Lox {
 
     fn run(&mut self, source: &str) -> Result<(), RunError> {
         let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
-        let stmts = Parser::parse(tokens.into_iter()).map_err(RunError::Parse)?;
+
+        let (stmts, e) = Parser::parse(tokens.into_iter());
+        if !e.is_empty() {
+            return Err(RunError::Parse(e));
+        }
+
         for stmt in stmts {
             self.evaluate_stmt(&stmt, Environments::GLOBAL_INDEX)
                 .map_err(RunError::Runtime)?;
+        }
+        Ok(())
+    }
+
+    fn run_repl(&mut self, source: &str) -> Result<(), RunError> {
+        let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
+
+        let (results, e) = Parser::parse_repl(tokens.into_iter());
+        if !e.is_empty() {
+            return Err(RunError::Parse(e));
+        }
+
+        for rst in results {
+            match rst {
+                REPLResult::Stmt(stmt) => self
+                    .evaluate_stmt(&stmt, Environments::GLOBAL_INDEX)
+                    .map_err(RunError::Runtime)?,
+                REPLResult::Expr(expr) => {
+                    println!("{}", self.evaluate_expr(&expr).map_err(RunError::Runtime)?);
+                }
+            }
         }
         Ok(())
     }

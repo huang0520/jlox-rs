@@ -6,13 +6,20 @@ use ParseError as E;
 
 type Result<T> = std::result::Result<T, ParseError>;
 
+#[derive(Debug)]
+pub enum REPLResult<'src> {
+    Stmt(Stmt<'src>),
+    Expr(Expr<'src>),
+}
+
+#[derive(Debug)]
 pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
     tokens: Peekable<I>,
     line: usize,
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
-    pub fn parse(tokens: I) -> std::result::Result<Vec<Stmt<'src>>, Vec<ParseError>> {
+    pub fn parse(tokens: I) -> (Vec<Stmt<'src>>, Vec<ParseError>) {
         let mut statements = Vec::new();
         let mut errors = Vec::new();
 
@@ -31,11 +38,47 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             }
         }
 
-        if errors.is_empty() {
-            Ok(statements)
-        } else {
-            Err(errors)
+        (statements, errors)
+    }
+
+    pub fn parse_repl(tokens: I) -> (Vec<REPLResult<'src>>, Vec<ParseError>) {
+        let mut results = Vec::new();
+        let mut errors = Vec::new();
+        let mut parser = Self {
+            tokens: tokens.peekable(),
+            line: 1,
+        };
+
+        while parser.peek().token_type != TokenType::Eof {
+            let result = match parser.peek().token_type {
+                // Check is statement
+                TokenType::Var | TokenType::Print | TokenType::LeftBrace => {
+                    parser.declaration().map(|stmt| REPLResult::Stmt(*stmt))
+                }
+                _ => parser.expression().and_then(|expr| {
+                    if parser.next_if(TokenType::Semicolon)?.is_some() {
+                        Ok(REPLResult::Stmt(Stmt::Expression(*expr)))
+                    } else if parser.peek().token_type == TokenType::Eof {
+                        Ok(REPLResult::Expr(*expr))
+                    } else {
+                        Err(ParseError::LackSemiColon {
+                            line: parser.peek().line,
+                            after: "value",
+                        })
+                    }
+                }),
+            };
+
+            match result {
+                Ok(r) => results.push(r),
+                Err(e) => {
+                    errors.push(e);
+                    parser.sync();
+                }
+            }
         }
+
+        (results, errors)
     }
 
     // Declaration
@@ -96,18 +139,6 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         Ok(Box::new(Stmt::Print(*expr)))
     }
 
-    fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
-        let expr = self.expression()?;
-        self.expect_next(
-            TokenType::Semicolon,
-            E::LackSemiColon {
-                line: self.line,
-                after: "value",
-            },
-        )?;
-        Ok(Box::new(Stmt::Expression(*expr)))
-    }
-
     fn block_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         let mut statements: Vec<Stmt<'_>> = Vec::new();
         while !matches!(
@@ -119,6 +150,18 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
         self.expect_next(TokenType::RightBrace, E::LackRightBrace { line: self.line })?;
         Ok(Box::new(Stmt::Block(statements)))
+    }
+
+    fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        let expr = self.expression()?;
+        self.expect_next(
+            TokenType::Semicolon,
+            E::LackSemiColon {
+                line: self.line,
+                after: "value",
+            },
+        )?;
+        Ok(Box::new(Stmt::Expression(*expr)))
     }
 
     // Expression
