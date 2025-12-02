@@ -47,6 +47,7 @@ pub enum TokenType {
     True,
     Var,
     While,
+    Break,
 
     Eof,
 }
@@ -99,6 +100,7 @@ impl Display for TokenType {
             TokenType::True => write!(f, "True"),
             TokenType::Var => write!(f, "Var"),
             TokenType::While => write!(f, "While"),
+            TokenType::Break => write!(f, "Break"),
 
             TokenType::Eof => write!(f, "Eof"),
         }

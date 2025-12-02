@@ -15,6 +15,7 @@ pub enum REPLResult<'src> {
 #[derive(Debug)]
 pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
     tokens: Peekable<I>,
+    loop_depth: usize,
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
@@ -24,6 +25,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
         let mut parser = Self {
             tokens: tokens.peekable(),
+            loop_depth: 0,
         };
 
         while parser.peek().token_type != TokenType::Eof {
@@ -44,6 +46,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         let mut errors = Vec::new();
         let mut parser = Self {
             tokens: tokens.peekable(),
+            loop_depth: 0,
         };
 
         while parser.peek().token_type != TokenType::Eof {
@@ -114,6 +117,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             TokenType::If => self.if_statement(),
             TokenType::While => self.while_statement(),
             TokenType::For => self.for_statement(),
+            TokenType::Break => self.break_statement(),
             _ => self.expression_statement(),
         }
     }
@@ -168,20 +172,21 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     fn while_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         // Consume 'while'
         self.next_token();
+        self.loop_depth += 1;
 
         self.expect_next(TokenType::LeftParen, "'(' after 'while'")?;
         let condition = *self.expression()?;
         self.expect_next(TokenType::RightParen, "')' after while condition")?;
+        let body = self.statement()?;
 
-        Ok(Box::new(Stmt::While {
-            condition,
-            body: self.statement()?,
-        }))
+        self.loop_depth -= 1;
+        Ok(Box::new(Stmt::While { condition, body }))
     }
 
     fn for_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         // Consume 'for'
         self.next_token();
+        self.loop_depth += 1;
 
         self.expect_next(TokenType::LeftParen, "'(' after 'for'")?;
         let initializer = match self.peek().token_type {
@@ -221,7 +226,20 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             body = Stmt::Block(vec![initializer.expect("initializer exist"), body]);
         }
 
+        self.loop_depth -= 1;
         Ok(Box::new(body))
+    }
+
+    fn break_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        // Comsume 'break'
+        let token = self.next_token();
+        self.expect_next(TokenType::Semicolon, "';' after break")?;
+
+        if self.loop_depth > 0 {
+            Ok(Box::new(Stmt::Break))
+        } else {
+            Err(E::NotInLoop { line: token.line })
+        }
     }
 
     fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
@@ -442,4 +460,6 @@ pub enum ParseError {
     NotExpression { line: usize },
     #[error("line {line}: invalid assignment target")]
     InvalidAssignment { line: usize },
+    #[error("line {line}: 'break' not in loop")]
+    NotInLoop { line: usize },
 }

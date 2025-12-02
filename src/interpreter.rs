@@ -15,6 +15,13 @@ pub struct Lox {
     environments: Environments,
 }
 
+#[derive(Debug)]
+pub enum StmtResult {
+    Normal,
+    Return,
+    Break,
+}
+
 impl Lox {
     pub fn new() -> Self {
         Self {
@@ -89,9 +96,10 @@ impl Lox {
 
         for rst in results {
             match rst {
-                REPLResult::Stmt(stmt) => self
-                    .evaluate_stmt(&stmt, Environments::GLOBAL_INDEX)
-                    .map_err(RunError::Runtime)?,
+                REPLResult::Stmt(stmt) => {
+                    self.evaluate_stmt(&stmt, Environments::GLOBAL_INDEX)
+                        .map_err(RunError::Runtime)?;
+                }
                 REPLResult::Expr(expr) => {
                     println!("{}", self.evaluate_expr(&expr).map_err(RunError::Runtime)?);
                 }
@@ -104,27 +112,41 @@ impl Lox {
         &mut self,
         statement: &Stmt,
         environment_idx: EnvironmentIndex,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<StmtResult, RuntimeError> {
         match statement {
             Stmt::Expression(expr) => {
                 self.evaluate_expr(expr)?;
+                Ok(StmtResult::Normal)
             }
             Stmt::Print(expr) => {
                 println!("{}", self.evaluate_expr(expr)?);
+                Ok(StmtResult::Normal)
             }
             Stmt::Var { name, initializer } => {
                 let value = self.evaluate_expr(initializer)?;
                 self.environments.define_value(name, value);
+                Ok(StmtResult::Normal)
             }
             Stmt::Block(statements) => {
                 let new_idx = self.environments.create_local(environment_idx);
                 for stmt in statements {
-                    if let Err(e) = self.evaluate_stmt(stmt, new_idx) {
-                        self.environments.pop_local();
-                        return Err(e);
+                    match self.evaluate_stmt(stmt, new_idx) {
+                        Ok(rst) => match rst {
+                            StmtResult::Normal => {}
+                            StmtResult::Return => todo!(),
+                            StmtResult::Break => {
+                                self.environments.pop_local();
+                                return Ok(StmtResult::Break);
+                            }
+                        },
+                        Err(e) => {
+                            self.environments.pop_local();
+                            return Err(e);
+                        }
                     }
                 }
                 self.environments.pop_local();
+                Ok(StmtResult::Normal)
             }
             Stmt::If {
                 condition,
@@ -132,18 +154,25 @@ impl Lox {
                 else_branch,
             } => {
                 if self.evaluate_expr(condition)?.into_truthy() {
-                    self.evaluate_stmt(then_branch, environment_idx)?;
+                    self.evaluate_stmt(then_branch, environment_idx)
                 } else if let Some(stmt) = else_branch {
-                    self.evaluate_stmt(stmt, environment_idx)?;
+                    self.evaluate_stmt(stmt, environment_idx)
+                } else {
+                    Ok(StmtResult::Normal)
                 }
             }
             Stmt::While { condition, body } => {
                 while self.evaluate_expr(condition)?.into_truthy() {
-                    self.evaluate_stmt(body, environment_idx)?;
+                    match self.evaluate_stmt(body, environment_idx)? {
+                        StmtResult::Normal => {}
+                        StmtResult::Return => todo!(),
+                        StmtResult::Break => break,
+                    }
                 }
+                Ok(StmtResult::Normal)
             }
+            Stmt::Break => Ok(StmtResult::Break),
         }
-        Ok(())
     }
 
     fn evaluate_expr(&mut self, expression: &Expr) -> Result<Literal, RuntimeError> {

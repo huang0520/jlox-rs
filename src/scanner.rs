@@ -265,6 +265,7 @@ impl<'src> Scanner<'src> {
             "true" => TokenType::True,
             "var" => TokenType::Var,
             "while" => TokenType::While,
+            "break" => TokenType::Break,
             _ => TokenType::Identifier,
         }
     }
