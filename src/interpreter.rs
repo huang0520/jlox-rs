@@ -108,16 +108,13 @@ impl Lox {
         match statement {
             Stmt::Expression(expr) => {
                 self.evaluate_expr(expr)?;
-                Ok(())
             }
             Stmt::Print(expr) => {
                 println!("{}", self.evaluate_expr(expr)?);
-                Ok(())
             }
             Stmt::Var { name, initializer } => {
                 let value = self.evaluate_expr(initializer)?;
                 self.environments.define_value(name, value);
-                Ok(())
             }
             Stmt::Block(statements) => {
                 let new_idx = self.environments.create_local(environment_idx);
@@ -128,7 +125,6 @@ impl Lox {
                     }
                 }
                 self.environments.pop_local();
-                Ok(())
             }
             Stmt::If {
                 condition,
@@ -140,9 +136,14 @@ impl Lox {
                 } else if let Some(stmt) = else_branch {
                     self.evaluate_stmt(stmt, environment_idx)?;
                 }
-                Ok(())
+            }
+            Stmt::While { condition, body } => {
+                while self.evaluate_expr(condition)?.into_truthy() {
+                    self.evaluate_stmt(body, environment_idx)?;
+                }
             }
         }
+        Ok(())
     }
 
     fn evaluate_expr(&mut self, expression: &Expr) -> Result<Literal, RuntimeError> {

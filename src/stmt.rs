@@ -14,4 +14,8 @@ pub enum Stmt<'src> {
         then_branch: Box<Stmt<'src>>,
         else_branch: Option<Box<Stmt<'src>>>,
     },
+    While {
+        condition: Expr<'src>,
+        body: Box<Stmt<'src>>,
+    },
 }

@@ -127,6 +127,14 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 self.next_token();
                 self.if_statement()
             }
+            TokenType::While => {
+                self.next_token();
+                self.while_statement()
+            }
+            TokenType::For => {
+                self.next_token();
+                self.for_statement()
+            }
             _ => self.expression_statement(),
         }
     }
@@ -185,6 +193,92 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             then_branch,
             else_branch,
         }))
+    }
+
+    fn while_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        self.expect_next(
+            TokenType::LeftParen,
+            E::LackLeftParam {
+                line: self.line,
+                after: "'while'",
+            },
+        )?;
+        let condition = *self.expression()?;
+        self.expect_next(
+            TokenType::RightParen,
+            E::LackRightParan {
+                line: self.line,
+                after: "while condition",
+            },
+        )?;
+
+        Ok(Box::new(Stmt::While {
+            condition,
+            body: self.statement()?,
+        }))
+    }
+
+    fn for_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        self.expect_next(
+            TokenType::LeftParen,
+            E::LackLeftParam {
+                line: self.line,
+                after: "'for'",
+            },
+        )?;
+        let initializer = match self.peek().token_type {
+            TokenType::Semicolon => {
+                self.next_token();
+                None
+            }
+            TokenType::Var => {
+                self.next_token();
+                Some(*self.var_declaration()?)
+            }
+            _ => Some(*self.expression_statement()?),
+        };
+
+        let condition = if self.peek().token_type == TokenType::Semicolon {
+            None
+        } else {
+            Some(*self.expression()?)
+        };
+        self.expect_next(
+            TokenType::Semicolon,
+            E::LackSemiColon {
+                line: self.line,
+                after: "'loop condition'",
+            },
+        )?;
+
+        let increment = if self.peek().token_type == TokenType::RightParen {
+            None
+        } else {
+            Some(Stmt::Expression(*self.expression()?))
+        };
+        self.expect_next(
+            TokenType::RightParen,
+            E::LackRightParan {
+                line: self.line,
+                after: "'for clause'",
+            },
+        )?;
+        let mut body = *self.statement()?;
+
+        if increment.is_some() {
+            body = Stmt::Block(vec![body, increment.expect("increment exist")]);
+        }
+        body = Stmt::While {
+            condition: condition.unwrap_or(Expr::Literal {
+                value: Literal::Boolean(true),
+            }),
+            body: Box::new(body),
+        };
+        if initializer.is_some() {
+            body = Stmt::Block(vec![initializer.expect("initializer exist"), body]);
+        }
+
+        Ok(Box::new(body))
     }
 
     fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
