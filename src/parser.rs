@@ -15,7 +15,6 @@ pub enum REPLResult<'src> {
 #[derive(Debug)]
 pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
     tokens: Peekable<I>,
-    line: usize,
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
@@ -25,7 +24,6 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
         let mut parser = Self {
             tokens: tokens.peekable(),
-            line: 1,
         };
 
         while parser.peek().token_type != TokenType::Eof {
@@ -46,7 +44,6 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         let mut errors = Vec::new();
         let mut parser = Self {
             tokens: tokens.peekable(),
-            line: 1,
         };
 
         while parser.peek().token_type != TokenType::Eof {
@@ -61,9 +58,10 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                     } else if parser.peek().token_type == TokenType::Eof {
                         Ok(REPLResult::Expr(*expr))
                     } else {
-                        Err(ParseError::LackSemiColon {
+                        Err(E::ExpectToken {
                             line: parser.peek().line,
-                            after: "value",
+                            expect: "';'",
+                            found: parser.peek().lexeme.to_string(),
                         })
                     }
                 }),
@@ -83,15 +81,17 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     // Declaration
     fn declaration(&mut self) -> Result<Box<Stmt<'src>>> {
-        if self.next_if(TokenType::Var)?.is_some() {
-            self.var_declaration()
-        } else {
-            self.statement()
+        match self.peek().token_type {
+            TokenType::Var => self.var_declaration(),
+            _ => self.statement(),
         }
     }
 
     fn var_declaration(&mut self) -> Result<Box<Stmt<'src>>> {
-        let name = self.expect_next(TokenType::Identifier, E::NotIdentifier { line: self.line })?;
+        // Consume 'var'
+        self.next_token();
+
+        let name = self.expect_next(TokenType::Identifier, "'variable name'")?;
         let initializer = if self.next_if(TokenType::Equal)?.is_some() {
             self.expression()?
         } else {
@@ -99,13 +99,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 value: Literal::Nil,
             })
         };
-        let _ = self.expect_next(
-            TokenType::Semicolon,
-            E::LackSemiColon {
-                line: self.line,
-                after: "variable declaration",
-            },
-        )?;
+        let _ = self.expect_next(TokenType::Semicolon, "';' after variable declaration")?;
         Ok(Box::new(Stmt::Var {
             name,
             initializer: *initializer,
@@ -115,43 +109,28 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     // Statement
     fn statement(&mut self) -> Result<Box<Stmt<'src>>> {
         match self.peek().token_type {
-            TokenType::Print => {
-                self.next_token();
-                self.print_statement()
-            }
-            TokenType::LeftBrace => {
-                self.next_token();
-                self.block_statement()
-            }
-            TokenType::If => {
-                self.next_token();
-                self.if_statement()
-            }
-            TokenType::While => {
-                self.next_token();
-                self.while_statement()
-            }
-            TokenType::For => {
-                self.next_token();
-                self.for_statement()
-            }
+            TokenType::Print => self.print_statement(),
+            TokenType::LeftBrace => self.block_statement(),
+            TokenType::If => self.if_statement(),
+            TokenType::While => self.while_statement(),
+            TokenType::For => self.for_statement(),
             _ => self.expression_statement(),
         }
     }
 
     fn print_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        // Consume 'print'
+        self.next_token();
+
         let expr = self.expression()?;
-        self.expect_next(
-            TokenType::Semicolon,
-            E::LackSemiColon {
-                line: self.line,
-                after: "value",
-            },
-        )?;
+        self.expect_next(TokenType::Semicolon, "';'")?;
         Ok(Box::new(Stmt::Print(*expr)))
     }
 
     fn block_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        // Consume '{'
+        self.next_token();
+
         let mut statements: Vec<Stmt<'_>> = Vec::new();
         while !matches!(
             self.peek().token_type,
@@ -160,26 +139,17 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             statements.push(*self.declaration()?);
         }
 
-        self.expect_next(TokenType::RightBrace, E::LackRightBrace { line: self.line })?;
+        self.expect_next(TokenType::RightBrace, "'}}' after block")?;
         Ok(Box::new(Stmt::Block(statements)))
     }
 
     fn if_statement(&mut self) -> Result<Box<Stmt<'src>>> {
-        self.expect_next(
-            TokenType::LeftParen,
-            E::LackLeftParam {
-                line: self.line,
-                after: "'if'",
-            },
-        )?;
+        // Consume 'if'
+        self.next_token();
+
+        self.expect_next(TokenType::LeftParen, "'(' after 'if'")?;
         let condition = *self.expression()?;
-        self.expect_next(
-            TokenType::RightParen,
-            E::LackRightParan {
-                line: self.line,
-                after: "if condition",
-            },
-        )?;
+        self.expect_next(TokenType::RightParen, "')' after if condition")?;
 
         let then_branch = self.statement()?;
         let else_branch = if self.next_if(TokenType::Else)?.is_some() {
@@ -196,21 +166,12 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn while_statement(&mut self) -> Result<Box<Stmt<'src>>> {
-        self.expect_next(
-            TokenType::LeftParen,
-            E::LackLeftParam {
-                line: self.line,
-                after: "'while'",
-            },
-        )?;
+        // Consume 'while'
+        self.next_token();
+
+        self.expect_next(TokenType::LeftParen, "'(' after 'while'")?;
         let condition = *self.expression()?;
-        self.expect_next(
-            TokenType::RightParen,
-            E::LackRightParan {
-                line: self.line,
-                after: "while condition",
-            },
-        )?;
+        self.expect_next(TokenType::RightParen, "')' after while condition")?;
 
         Ok(Box::new(Stmt::While {
             condition,
@@ -219,22 +180,16 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn for_statement(&mut self) -> Result<Box<Stmt<'src>>> {
-        self.expect_next(
-            TokenType::LeftParen,
-            E::LackLeftParam {
-                line: self.line,
-                after: "'for'",
-            },
-        )?;
+        // Consume 'for'
+        self.next_token();
+
+        self.expect_next(TokenType::LeftParen, "'(' after 'for'")?;
         let initializer = match self.peek().token_type {
             TokenType::Semicolon => {
                 self.next_token();
                 None
             }
-            TokenType::Var => {
-                self.next_token();
-                Some(*self.var_declaration()?)
-            }
+            TokenType::Var => Some(*self.var_declaration()?),
             _ => Some(*self.expression_statement()?),
         };
 
@@ -243,26 +198,14 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         } else {
             Some(*self.expression()?)
         };
-        self.expect_next(
-            TokenType::Semicolon,
-            E::LackSemiColon {
-                line: self.line,
-                after: "'loop condition'",
-            },
-        )?;
+        self.expect_next(TokenType::Semicolon, "';' after loop condition")?;
 
         let increment = if self.peek().token_type == TokenType::RightParen {
             None
         } else {
             Some(Stmt::Expression(*self.expression()?))
         };
-        self.expect_next(
-            TokenType::RightParen,
-            E::LackRightParan {
-                line: self.line,
-                after: "'for clause'",
-            },
-        )?;
+        self.expect_next(TokenType::RightParen, "')' after for closure")?;
         let mut body = *self.statement()?;
 
         if increment.is_some() {
@@ -283,13 +226,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         let expr = self.expression()?;
-        self.expect_next(
-            TokenType::Semicolon,
-            E::LackSemiColon {
-                line: self.line,
-                after: "value",
-            },
-        )?;
+        self.expect_next(TokenType::Semicolon, "';'")?;
         Ok(Box::new(Stmt::Expression(*expr)))
     }
 
@@ -302,6 +239,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         let expr = self.logic_or()?;
 
         // If next token is '=' -> Assign value
+        let line = self.peek().line;
         if self.next_if(TokenType::Equal)?.is_some() {
             let value = self.assignment()?;
 
@@ -311,7 +249,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                     value,
                 }))
             } else {
-                Err(E::InvalidAssignment { line: self.line })
+                Err(E::InvalidAssignment { line })
             }
         } else {
             Ok(expr)
@@ -394,19 +332,15 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             TokenType::LeftParen => {
                 self.next_token();
                 let expr = self.expression()?;
-                self.expect_next(
-                    TokenType::RightParen,
-                    E::LackRightParan {
-                        line: self.line,
-                        after: "expression",
-                    },
-                )?;
+                self.expect_next(TokenType::RightParen, ")")?;
                 Ok(Box::new(Expr::Grouping { expression: expr }))
             }
             TokenType::Identifier => Ok(Box::new(Expr::Variable {
                 name: self.next_token(),
             })),
-            _ => Err(E::NotExpression { line: self.line }),
+            _ => Err(E::NotExpression {
+                line: self.peek().line,
+            }),
         }
     }
 
@@ -464,10 +398,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn next_token(&mut self) -> Token<'src> {
-        self.tokens
-            .next()
-            .inspect(|t| self.line = t.line)
-            .expect("always an EOF token")
+        self.tokens.next().expect("always an EOF token")
     }
 
     /// Advance iterator when match and return matched token
@@ -482,10 +413,18 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     /// Advance iterator when next token match expect type
     /// Return given Err if not match
-    fn expect_next(&mut self, match_type: TokenType, err: ParseError) -> Result<Token<'src>> {
+    fn expect_next(
+        &mut self,
+        match_type: TokenType,
+        expect_desc: &'static str,
+    ) -> Result<Token<'src>> {
         match self.tokens.peek() {
             Some(t) if t.token_type == match_type => Ok(self.next_token()),
-            Some(_) => Err(err),
+            Some(found) => Err(E::ExpectToken {
+                line: found.line,
+                expect: expect_desc,
+                found: found.lexeme.to_string(),
+            }),
             None => unreachable!("always an EOF token"),
         }
     }
@@ -493,16 +432,12 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum ParseError {
-    #[error("line {line}: expect ';' after {after}")]
-    LackSemiColon { line: usize, after: &'static str },
-    #[error("line {line}: expect '(' after {after}")]
-    LackLeftParam { line: usize, after: &'static str },
-    #[error("line {line}: expect ')' after {after}")]
-    LackRightParan { line: usize, after: &'static str },
-    #[error("line {line}: expect '}}' after block")]
-    LackRightBrace { line: usize },
-    #[error("line {line}: expect variable name")]
-    NotIdentifier { line: usize },
+    #[error("line {line}: expected {expect}, found {found}")]
+    ExpectToken {
+        line: usize,
+        expect: &'static str,
+        found: String,
+    },
     #[error("line {line}: expect expression")]
     NotExpression { line: usize },
     #[error("line {line}: invalid assignment target")]
