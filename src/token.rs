@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::Display;
 
 use crate::literal::Literal;
@@ -7,7 +6,15 @@ use crate::token_type::TokenType;
 #[derive(Debug, PartialEq, Clone)]
 pub struct Token<'src> {
     pub token_type: TokenType,
-    pub lexeme: Cow<'src, str>,
+    pub lexeme: &'src str,
+    pub line: usize,
+    pub literal: Option<Literal>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct RuntimeToken {
+    pub token_type: TokenType,
+    pub lexeme: String,
     pub line: usize,
     pub literal: Option<Literal>,
 }
@@ -57,7 +64,7 @@ impl<'src> Token<'src> {
     pub fn new_eof(line: usize) -> Self {
         Token {
             token_type: TokenType::Eof,
-            lexeme: Cow::Borrowed(""),
+            lexeme: "",
             line,
             literal: None,
         }
@@ -67,5 +74,16 @@ impl<'src> Token<'src> {
 impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.token_type, self.lexeme)
+    }
+}
+
+impl From<Token<'_>> for RuntimeToken {
+    fn from(t: Token<'_>) -> Self {
+        Self {
+            token_type: t.token_type,
+            lexeme: t.lexeme.to_string(),
+            line: t.line,
+            literal: t.literal,
+        }
     }
 }

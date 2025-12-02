@@ -1,34 +1,29 @@
+use crate::callable::{Callable, UserFunction};
+use crate::environment::{Environment, EnvironmentError};
+use crate::expr::RuntimeExpr;
+use crate::literal::{Literal, TypeError};
+use crate::native_fn;
+use crate::parser::{ParseError, Parser, REPLResult};
+use crate::scanner::{ScanError, Scanner};
+use crate::stmt::RuntimeStmt;
+use crate::token_type::TokenType;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::environment::{Environment, EnvironmentError};
-use crate::expr::Expr;
-use crate::literal::{Literal, TypeError};
-use crate::parser::{ParseError, Parser, REPLResult};
-use crate::scanner::{ScanError, Scanner};
-use crate::stmt::Stmt;
-use crate::token_type::TokenType;
-
 #[derive(Debug)]
 pub struct Lox {
-    global: Environment,
+    pub global: Environment,
 }
 
 #[derive(Debug)]
 pub enum StmtResult {
     Normal,
-    Return,
+    Return(Literal),
     Break,
 }
 
 impl Lox {
-    pub fn new() -> Self {
-        Self {
-            global: Environment::new(None),
-        }
-    }
-
     pub fn execute(&mut self, args: &[String]) -> Result<(), LoxError> {
         match args.len() {
             1 => self
@@ -80,7 +75,7 @@ impl Lox {
         }
 
         for stmt in stmts {
-            self.evaluate_stmt(&stmt, &self.global)
+            self.evaluate_stmt(&stmt.into(), &self.global)
                 .map_err(RunError::Runtime)?;
         }
         Ok(())
@@ -97,13 +92,13 @@ impl Lox {
         for rst in results {
             match rst {
                 REPLResult::Stmt(stmt) => {
-                    self.evaluate_stmt(&stmt, &self.global)
+                    self.evaluate_stmt(&stmt.into(), &self.global)
                         .map_err(RunError::Runtime)?;
                 }
                 REPLResult::Expr(expr) => {
                     println!(
                         "{}",
-                        self.evaluate_expr(&expr, &self.global)
+                        self.evaluate_expr(&expr.into(), &self.global)
                             .map_err(RunError::Runtime)?
                     );
                 }
@@ -114,38 +109,25 @@ impl Lox {
 
     fn evaluate_stmt(
         &self,
-        statement: &Stmt,
+        statement: &RuntimeStmt,
         environment: &Environment,
     ) -> Result<StmtResult, RuntimeError> {
         match statement {
-            Stmt::Expression(expression) => {
+            RuntimeStmt::Expression(expression) => {
                 self.evaluate_expr(expression, environment)?;
                 Ok(StmtResult::Normal)
             }
-            Stmt::Print(expression) => {
+            RuntimeStmt::Print(expression) => {
                 println!("{}", self.evaluate_expr(expression, environment)?);
                 Ok(StmtResult::Normal)
             }
-            Stmt::Var { name, initializer } => {
+            RuntimeStmt::Var { name, initializer } => {
                 let value = self.evaluate_expr(initializer, environment)?;
                 environment.define(&name.lexeme, value);
                 Ok(StmtResult::Normal)
             }
-            Stmt::Block(statements) => {
-                let local = Environment::new(Some(environment.clone()));
-                for stmt in statements {
-                    match self.evaluate_stmt(stmt, &local) {
-                        Ok(rst) => match rst {
-                            StmtResult::Normal => {}
-                            StmtResult::Return => todo!(),
-                            StmtResult::Break => return Ok(StmtResult::Break),
-                        },
-                        Err(e) => return Err(e),
-                    }
-                }
-                Ok(StmtResult::Normal)
-            }
-            Stmt::If {
+            RuntimeStmt::Block(statements) => self.evaluate_block(statements, environment),
+            RuntimeStmt::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -158,27 +140,60 @@ impl Lox {
                     Ok(StmtResult::Normal)
                 }
             }
-            Stmt::While { condition, body } => {
+            RuntimeStmt::While { condition, body } => {
                 while self.evaluate_expr(condition, environment)?.into_truthy() {
                     match self.evaluate_stmt(body, environment)? {
                         StmtResult::Normal => {}
-                        StmtResult::Return => todo!(),
                         StmtResult::Break => break,
+                        rst @ StmtResult::Return(..) => return Ok(rst),
                     }
                 }
                 Ok(StmtResult::Normal)
             }
-            Stmt::Break => Ok(StmtResult::Break),
+            RuntimeStmt::Break => Ok(StmtResult::Break),
+            RuntimeStmt::Function {
+                name,
+                parameters,
+                body,
+            } => {
+                let function = UserFunction {
+                    name: Box::new(name.clone()),
+                    parameters: parameters.to_vec(),
+                    body: self.statements_of_block(*body.clone()),
+                };
+                environment.define(&name.lexeme, Literal::Callable(Callable::User(function)));
+                Ok(StmtResult::Normal)
+            }
+            RuntimeStmt::Return { keyword, value } => {
+                Ok(StmtResult::Return(self.evaluate_expr(value, environment)?))
+            }
+            _ => todo!(),
         }
+    }
+
+    pub fn evaluate_block(
+        &self,
+        statements: &[RuntimeStmt],
+        parent_environment: &Environment,
+    ) -> Result<StmtResult, RuntimeError> {
+        let local = Environment::new(Some(parent_environment.clone()));
+
+        for stmt in statements {
+            match self.evaluate_stmt(stmt, &local)? {
+                StmtResult::Normal => {}
+                rst => return Ok(rst),
+            }
+        }
+        Ok(StmtResult::Normal)
     }
 
     fn evaluate_expr(
         &self,
-        expression: &Expr,
+        expression: &RuntimeExpr,
         environment: &Environment,
     ) -> Result<Literal, RuntimeError> {
         match expression {
-            Expr::Variable { name } => {
+            RuntimeExpr::Variable { name } => {
                 environment
                     .get(&name.lexeme)
                     .map_err(|e| RuntimeError::UndefinedVariable {
@@ -186,9 +201,9 @@ impl Lox {
                         source: e,
                     })
             }
-            Expr::Literal { value } => Ok(value.clone()),
-            Expr::Grouping { expression } => self.evaluate_expr(expression, environment),
-            Expr::Unary { operator, right } => {
+            RuntimeExpr::Literal { value } => Ok(value.clone()),
+            RuntimeExpr::Grouping { expression } => self.evaluate_expr(expression, environment),
+            RuntimeExpr::Unary { operator, right } => {
                 let right_lit = self.evaluate_expr(right, environment)?;
 
                 match operator.token_type {
@@ -197,7 +212,7 @@ impl Lox {
                     _ => unreachable!("only minus and bang are unary operator"),
                 }
             }
-            Expr::Binary {
+            RuntimeExpr::Binary {
                 left,
                 operator,
                 right,
@@ -233,7 +248,7 @@ impl Lox {
                     _ => unreachable!(),
                 }
             }
-            Expr::Assign { name, value } => {
+            RuntimeExpr::Assign { name, value } => {
                 let value = self.evaluate_expr(value, environment)?;
                 environment
                     .assign(&name.lexeme, value.clone())
@@ -243,7 +258,7 @@ impl Lox {
                     })?;
                 Ok(value)
             }
-            Expr::Logical {
+            RuntimeExpr::Logical {
                 left,
                 operator,
                 right,
@@ -258,6 +273,33 @@ impl Lox {
                 }
                 self.evaluate_expr(right, environment)
             }
+            RuntimeExpr::Call {
+                callee,
+                paren,
+                arguments,
+            } => {
+                let callee = self.evaluate_expr(callee, environment)?;
+
+                let arguments: Result<Vec<Literal>, RuntimeError> = arguments
+                    .iter()
+                    .map(|expr| self.evaluate_expr(expr, environment))
+                    .collect();
+                let arguments = arguments?;
+
+                match callee {
+                    Literal::Callable(function) => {
+                        if arguments.len() != function.arity() {
+                            Err(RuntimeError::UnmatchedArguments {
+                                expect: function.arity(),
+                                get: arguments.len(),
+                            })
+                        } else {
+                            function.call(self, &arguments)
+                        }
+                    }
+                    _ => Err(RuntimeError::NotCallable(callee.to_string())),
+                }
+            }
             _ => todo!(),
         }
     }
@@ -270,6 +312,29 @@ impl Lox {
             }
             _ => todo!(),
         }
+    }
+
+    fn statements_of_block(&self, block_statement: RuntimeStmt) -> Vec<RuntimeStmt> {
+        match block_statement {
+            RuntimeStmt::Block(statements) => statements,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Default for Lox {
+    fn default() -> Self {
+        let global = Environment::default();
+        global.define(
+            "clock",
+            Literal::Callable(Callable::Native {
+                name: "clock",
+                arity: 0,
+                function: native_fn::clock,
+            }),
+        );
+
+        Self { global }
     }
 }
 
@@ -351,6 +416,10 @@ pub enum RuntimeError {
     },
     #[error(transparent)]
     Type(#[from] TypeError),
+    #[error("expected callable")]
+    NotCallable(String),
+    #[error("expected {expect} arguments, got {get}")]
+    UnmatchedArguments { expect: usize, get: usize },
 }
 
 fn format_errors<T: std::fmt::Display>(errors: &[T]) -> String {

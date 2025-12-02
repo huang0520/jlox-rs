@@ -1,7 +1,9 @@
+mod callable;
 mod environment;
 mod expr;
 mod interpreter;
 mod literal;
+mod native_fn;
 mod parser;
 mod scanner;
 mod stmt;
@@ -17,7 +19,7 @@ use crate::interpreter::LoxErrorKind;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let mut lox = Lox::new();
+    let mut lox = Lox::default();
     if let Err(e) = lox.execute(&args) {
         let exitcode = match e.source {
             LoxErrorKind::InvalidArguments => ExitCode::from(64),

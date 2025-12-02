@@ -1,10 +1,13 @@
 use std::fmt::Display;
 
+use crate::callable::Callable;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Number(f64),
     String(String),
     Boolean(bool),
+    Callable(Callable),
     Nil,
 }
 
@@ -64,6 +67,7 @@ impl Display for Literal {
             Literal::Number(n) => write!(f, "{n}"),
             Literal::String(s) => write!(f, "{s}"),
             Literal::Boolean(b) => write!(f, "{b}"),
+            Literal::Callable(c) => write!(f, "{c}"),
             Literal::Nil => write!(f, "nil"),
         }
     }

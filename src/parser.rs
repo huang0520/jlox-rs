@@ -15,16 +15,17 @@ pub enum REPLResult<'src> {
 #[derive(Debug)]
 pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
     tokens: Peekable<I>,
+    errors: Vec<ParseError>,
     loop_depth: usize,
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     pub fn parse(tokens: I) -> (Vec<Stmt<'src>>, Vec<ParseError>) {
         let mut statements = Vec::new();
-        let mut errors = Vec::new();
 
         let mut parser = Self {
             tokens: tokens.peekable(),
+            errors: Vec::new(),
             loop_depth: 0,
         };
 
@@ -32,20 +33,20 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             match parser.declaration() {
                 Ok(stmt) => statements.push(*stmt),
                 Err(e) => {
-                    errors.push(e);
+                    parser.errors.push(e);
                     parser.sync();
                 }
             }
         }
 
-        (statements, errors)
+        (statements, parser.errors)
     }
 
     pub fn parse_repl(tokens: I) -> (Vec<REPLResult<'src>>, Vec<ParseError>) {
         let mut results = Vec::new();
-        let mut errors = Vec::new();
         let mut parser = Self {
             tokens: tokens.peekable(),
+            errors: Vec::new(),
             loop_depth: 0,
         };
 
@@ -63,7 +64,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                     } else {
                         Err(E::ExpectToken {
                             line: parser.peek().line,
-                            expect: "';'",
+                            expect: "';'".to_string(),
                             found: parser.peek().lexeme.to_string(),
                         })
                     }
@@ -73,19 +74,24 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             match result {
                 Ok(r) => results.push(r),
                 Err(e) => {
-                    errors.push(e);
+                    parser.errors.push(e);
                     parser.sync();
                 }
             }
         }
 
-        (results, errors)
+        (results, parser.errors)
     }
 
-    // Declaration
+    // ========== Declaration Grammer ==========
+    // declaration    → funDecl
+    //                | varDecl
+    //                | statement ;
+    //
     fn declaration(&mut self) -> Result<Box<Stmt<'src>>> {
         match self.peek().token_type {
             TokenType::Var => self.var_declaration(),
+            TokenType::Fun => self.fun_declaration("function"),
             _ => self.statement(),
         }
     }
@@ -109,7 +115,67 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         }))
     }
 
-    // Statement
+    fn fun_declaration(&mut self, kind: &'static str) -> Result<Box<Stmt<'src>>> {
+        // Consume 'fun'
+        self.next_token();
+
+        let name = self.expect_next(TokenType::Identifier, &format!("{kind} name"))?;
+        self.expect_next(TokenType::LeftParen, &format!("'(' after {kind} name"))?;
+
+        let mut parameters = Vec::new();
+        if self.peek().token_type != TokenType::RightParen {
+            loop {
+                let line = self.peek().line;
+                if parameters.len() >= 255 {
+                    self.errors.push(ParseError::TooMuch {
+                        line,
+                        what: "parameters",
+                    });
+                }
+                parameters.push(self.expect_next(TokenType::Identifier, "parameter name")?);
+                if self.next_if(TokenType::Comma)?.is_none() {
+                    break;
+                }
+            }
+        }
+        self.expect_next(TokenType::RightParen, "')' after arguments")?;
+
+        let peeked = self.peek();
+        if peeked.token_type != TokenType::LeftBrace {
+            return Err(ParseError::ExpectToken {
+                line: peeked.line,
+                expect: format!("'{{' before {kind} body"),
+                found: peeked.lexeme.to_string(),
+            });
+        }
+        let body = self.block_statement()?;
+        Ok(Box::new(Stmt::Function {
+            name,
+            parameters,
+            body,
+        }))
+    }
+
+    // ========== Statement Grammer ==========
+    // statement      → exprStmt
+    //                | forStmt
+    //                | ifStmt
+    //                | printStmt
+    //                | returnStmt
+    //                | whileStmt
+    //                | block ;
+    //
+    // exprStmt       → expression ";" ;
+    // forStmt        → "for" "(" ( varDecl | exprStmt | ";" )
+    //                            expression? ";"
+    //                            expression? ")" statement ;
+    // ifStmt         → "if" "(" expression ")" statement
+    //                  ( "else" statement )? ;
+    // printStmt      → "print" expression ";" ;
+    // returnStmt     → "return" expression? ";" ;
+    // whileStmt      → "while" "(" expression ")" statement ;
+    // block          → "{" declaration* "}" ;
+    //
     fn statement(&mut self) -> Result<Box<Stmt<'src>>> {
         match self.peek().token_type {
             TokenType::Print => self.print_statement(),
@@ -117,6 +183,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             TokenType::If => self.if_statement(),
             TokenType::While => self.while_statement(),
             TokenType::For => self.for_statement(),
+            TokenType::Return => self.return_statement(),
             TokenType::Break => self.break_statement(),
             _ => self.expression_statement(),
         }
@@ -230,6 +297,23 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         Ok(Box::new(body))
     }
 
+    fn return_statement(&mut self) -> Result<Box<Stmt<'src>>> {
+        // Comsume 'return'
+        let token = self.next_token();
+
+        let mut expr = Expr::Literal {
+            value: Literal::Nil,
+        };
+        if self.peek().token_type != TokenType::Semicolon {
+            expr = *self.expression()?;
+        }
+        self.expect_next(TokenType::Semicolon, "';' after return value")?;
+        Ok(Box::new(Stmt::Return {
+            keyword: token,
+            value: expr,
+        }))
+    }
+
     fn break_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         // Comsume 'break'
         let token = self.next_token();
@@ -248,7 +332,25 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         Ok(Box::new(Stmt::Expression(*expr)))
     }
 
-    // Expression
+    // ========== Expressions Grammer ==========
+    // expression     → assignment ;
+    //
+    // assignment     → ( call "." )? IDENTIFIER "=" assignment
+    //                | logic_or ;
+    //
+    // logic_or       → logic_and ( "or" logic_and )* ;
+    // logic_and      → equality ( "and" equality )* ;
+    // equality       → comparison ( ( "!=" | "==" ) comparison )* ;
+    // comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
+    // term           → factor ( ( "-" | "+" ) factor )* ;
+    // factor         → unary ( ( "/" | "*" ) unary )* ;
+    //
+    // unary          → ( "!" | "-" ) unary | call ;
+    // call           → primary ( "(" arguments? ")" | "." IDENTIFIER )* ;
+    // primary        → "true" | "false" | "nil" | "this"
+    //                | NUMBER | STRING | IDENTIFIER | "(" expression ")"
+    //                | "super" "." IDENTIFIER ;
+    //
     fn expression(&mut self) -> Result<Box<Expr<'src>>> {
         self.assignment()
     }
@@ -334,8 +436,25 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                 right: self.unary()?,
             }))
         } else {
-            self.primary()
+            self.call()
         }
+    }
+
+    fn call(&mut self) -> Result<Box<Expr<'src>>> {
+        let mut expr = self.primary()?;
+
+        while true {
+            match self.peek().token_type {
+                TokenType::LeftParen => {
+                    expr = self.finish_call(expr)?;
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        Ok(expr)
     }
 
     fn primary(&mut self) -> Result<Box<Expr<'src>>> {
@@ -389,14 +508,11 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     // Helper function
-    fn parse_binary_op<F>(
+    fn parse_binary_op(
         &mut self,
-        parse_operand: F,
+        parse_operand: fn(&mut Self) -> Result<Box<Expr<'src>>>,
         operators: &[TokenType],
-    ) -> Result<Box<Expr<'src>>>
-    where
-        F: Fn(&mut Self) -> Result<Box<Expr<'src>>>,
-    {
+    ) -> Result<Box<Expr<'src>>> {
         let mut expr = parse_operand(self)?;
 
         while operators.contains(&self.peek().token_type) {
@@ -409,6 +525,35 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             });
         }
         Ok(expr)
+    }
+
+    fn finish_call(&mut self, callee: Box<Expr<'src>>) -> Result<Box<Expr<'src>>> {
+        // Consume '('
+        self.next_token();
+
+        let mut arguments = Vec::new();
+        if self.peek().token_type != TokenType::RightParen {
+            loop {
+                let line = self.peek().line;
+                if arguments.len() >= 255 {
+                    self.errors.push(ParseError::TooMuch {
+                        line,
+                        what: "arguments",
+                    });
+                }
+                arguments.push(*self.expression()?);
+                if self.next_if(TokenType::Comma)?.is_none() {
+                    break;
+                }
+            }
+        }
+        let paren = self.expect_next(TokenType::RightParen, "')' after arguments")?;
+
+        Ok(Box::new(Expr::Call {
+            callee,
+            paren,
+            arguments,
+        }))
     }
 
     fn peek(&mut self) -> &Token<'src> {
@@ -431,16 +576,12 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     /// Advance iterator when next token match expect type
     /// Return given Err if not match
-    fn expect_next(
-        &mut self,
-        match_type: TokenType,
-        expect_desc: &'static str,
-    ) -> Result<Token<'src>> {
+    fn expect_next(&mut self, match_type: TokenType, expect_desc: &str) -> Result<Token<'src>> {
         match self.tokens.peek() {
             Some(t) if t.token_type == match_type => Ok(self.next_token()),
             Some(found) => Err(E::ExpectToken {
                 line: found.line,
-                expect: expect_desc,
+                expect: expect_desc.to_string(),
                 found: found.lexeme.to_string(),
             }),
             None => unreachable!("always an EOF token"),
@@ -453,13 +594,15 @@ pub enum ParseError {
     #[error("line {line}: expected {expect}, found {found}")]
     ExpectToken {
         line: usize,
-        expect: &'static str,
+        expect: String,
         found: String,
     },
-    #[error("line {line}: expect expression")]
+    #[error("line {line}: expected expression")]
     NotExpression { line: usize },
     #[error("line {line}: invalid assignment target")]
     InvalidAssignment { line: usize },
     #[error("line {line}: 'break' not in loop")]
     NotInLoop { line: usize },
+    #[error("line {line}: expected number of {what} less than 255")]
+    TooMuch { line: usize, what: &'static str },
 }
