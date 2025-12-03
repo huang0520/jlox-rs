@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::environment::{EnvironmentError, EnvironmentIndex, Environments};
+use crate::environment::{Environment, EnvironmentError};
 use crate::expr::Expr;
 use crate::literal::{Literal, TypeError};
 use crate::parser::{ParseError, Parser, REPLResult};
@@ -12,7 +12,7 @@ use crate::token_type::TokenType;
 
 #[derive(Debug)]
 pub struct Lox {
-    environments: Environments,
+    global: Environment,
 }
 
 #[derive(Debug)]
@@ -25,7 +25,7 @@ pub enum StmtResult {
 impl Lox {
     pub fn new() -> Self {
         Self {
-            environments: Environments::new(),
+            global: Environment::new(None),
         }
     }
 
@@ -71,7 +71,7 @@ impl Lox {
         Ok(())
     }
 
-    fn run(&mut self, source: &str) -> Result<(), RunError> {
+    fn run(&self, source: &str) -> Result<(), RunError> {
         let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
 
         let (stmts, e) = Parser::parse(tokens.into_iter());
@@ -80,13 +80,13 @@ impl Lox {
         }
 
         for stmt in stmts {
-            self.evaluate_stmt(&stmt, Environments::GLOBAL_INDEX)
+            self.evaluate_stmt(&stmt, &self.global)
                 .map_err(RunError::Runtime)?;
         }
         Ok(())
     }
 
-    fn run_repl(&mut self, source: &str) -> Result<(), RunError> {
+    fn run_repl(&self, source: &str) -> Result<(), RunError> {
         let tokens = Scanner::scan_tokens(source).map_err(RunError::Scan)?;
 
         let (results, e) = Parser::parse_repl(tokens.into_iter());
@@ -97,11 +97,15 @@ impl Lox {
         for rst in results {
             match rst {
                 REPLResult::Stmt(stmt) => {
-                    self.evaluate_stmt(&stmt, Environments::GLOBAL_INDEX)
+                    self.evaluate_stmt(&stmt, &self.global)
                         .map_err(RunError::Runtime)?;
                 }
                 REPLResult::Expr(expr) => {
-                    println!("{}", self.evaluate_expr(&expr).map_err(RunError::Runtime)?);
+                    println!(
+                        "{}",
+                        self.evaluate_expr(&expr, &self.global)
+                            .map_err(RunError::Runtime)?
+                    );
                 }
             }
         }
@@ -109,43 +113,36 @@ impl Lox {
     }
 
     fn evaluate_stmt(
-        &mut self,
+        &self,
         statement: &Stmt,
-        environment_idx: EnvironmentIndex,
+        environment: &Environment,
     ) -> Result<StmtResult, RuntimeError> {
         match statement {
-            Stmt::Expression(expr) => {
-                self.evaluate_expr(expr)?;
+            Stmt::Expression(expression) => {
+                self.evaluate_expr(expression, environment)?;
                 Ok(StmtResult::Normal)
             }
-            Stmt::Print(expr) => {
-                println!("{}", self.evaluate_expr(expr)?);
+            Stmt::Print(expression) => {
+                println!("{}", self.evaluate_expr(expression, environment)?);
                 Ok(StmtResult::Normal)
             }
             Stmt::Var { name, initializer } => {
-                let value = self.evaluate_expr(initializer)?;
-                self.environments.define_value(name, value);
+                let value = self.evaluate_expr(initializer, environment)?;
+                environment.define(&name.lexeme, value);
                 Ok(StmtResult::Normal)
             }
             Stmt::Block(statements) => {
-                let new_idx = self.environments.create_local(environment_idx);
+                let local = Environment::new(Some(environment.clone()));
                 for stmt in statements {
-                    match self.evaluate_stmt(stmt, new_idx) {
+                    match self.evaluate_stmt(stmt, &local) {
                         Ok(rst) => match rst {
                             StmtResult::Normal => {}
                             StmtResult::Return => todo!(),
-                            StmtResult::Break => {
-                                self.environments.pop_local();
-                                return Ok(StmtResult::Break);
-                            }
+                            StmtResult::Break => return Ok(StmtResult::Break),
                         },
-                        Err(e) => {
-                            self.environments.pop_local();
-                            return Err(e);
-                        }
+                        Err(e) => return Err(e),
                     }
                 }
-                self.environments.pop_local();
                 Ok(StmtResult::Normal)
             }
             Stmt::If {
@@ -153,17 +150,17 @@ impl Lox {
                 then_branch,
                 else_branch,
             } => {
-                if self.evaluate_expr(condition)?.into_truthy() {
-                    self.evaluate_stmt(then_branch, environment_idx)
+                if self.evaluate_expr(condition, environment)?.into_truthy() {
+                    self.evaluate_stmt(then_branch, environment)
                 } else if let Some(stmt) = else_branch {
-                    self.evaluate_stmt(stmt, environment_idx)
+                    self.evaluate_stmt(stmt, environment)
                 } else {
                     Ok(StmtResult::Normal)
                 }
             }
             Stmt::While { condition, body } => {
-                while self.evaluate_expr(condition)?.into_truthy() {
-                    match self.evaluate_stmt(body, environment_idx)? {
+                while self.evaluate_expr(condition, environment)?.into_truthy() {
+                    match self.evaluate_stmt(body, environment)? {
                         StmtResult::Normal => {}
                         StmtResult::Return => todo!(),
                         StmtResult::Break => break,
@@ -175,20 +172,24 @@ impl Lox {
         }
     }
 
-    fn evaluate_expr(&mut self, expression: &Expr) -> Result<Literal, RuntimeError> {
+    fn evaluate_expr(
+        &self,
+        expression: &Expr,
+        environment: &Environment,
+    ) -> Result<Literal, RuntimeError> {
         match expression {
             Expr::Variable { name } => {
-                self.environments
-                    .get_value(name)
+                environment
+                    .get(&name.lexeme)
                     .map_err(|e| RuntimeError::UndefinedVariable {
                         line: name.line,
                         source: e,
                     })
             }
             Expr::Literal { value } => Ok(value.clone()),
-            Expr::Grouping { expression } => self.evaluate_expr(expression),
+            Expr::Grouping { expression } => self.evaluate_expr(expression, environment),
             Expr::Unary { operator, right } => {
-                let right_lit = self.evaluate_expr(right)?;
+                let right_lit = self.evaluate_expr(right, environment)?;
 
                 match operator.token_type {
                     TokenType::Minus => Ok(Literal::Number(-right_lit.try_into()?)),
@@ -201,8 +202,8 @@ impl Lox {
                 operator,
                 right,
             } => {
-                let left_lit = self.evaluate_expr(left)?;
-                let right_lit = self.evaluate_expr(right)?;
+                let left_lit = self.evaluate_expr(left, environment)?;
+                let right_lit = self.evaluate_expr(right, environment)?;
 
                 match operator.token_type {
                     TokenType::Minus => Ok(Literal::Number(
@@ -233,9 +234,9 @@ impl Lox {
                 }
             }
             Expr::Assign { name, value } => {
-                let value = self.evaluate_expr(value)?;
-                self.environments
-                    .assign_value(name, value.clone())
+                let value = self.evaluate_expr(value, environment)?;
+                environment
+                    .assign(&name.lexeme, value.clone())
                     .map_err(|e| RuntimeError::UndefinedVariable {
                         line: name.line,
                         source: e,
@@ -247,7 +248,7 @@ impl Lox {
                 operator,
                 right,
             } => {
-                let left = self.evaluate_expr(left)?;
+                let left = self.evaluate_expr(left, environment)?;
                 if operator.token_type == TokenType::Or {
                     if left.is_truthy() {
                         return Ok(left);
@@ -255,7 +256,7 @@ impl Lox {
                 } else if !left.is_truthy() {
                     return Ok(left);
                 }
-                self.evaluate_expr(right)
+                self.evaluate_expr(right, environment)
             }
             _ => todo!(),
         }
