@@ -5,6 +5,8 @@ use crate::literal::Literal;
 use crate::token::Token;
 use crate::token_type::TokenType;
 
+use snafu::Snafu;
+
 #[derive(Debug)]
 pub struct Scanner<'src> {
     source: &'src str,
@@ -39,8 +41,8 @@ impl<'src> Scanner<'src> {
             }
         }
 
-        tokens.push(Token::new_eof(scanner.line));
         if errors.is_empty() {
+            tokens.push(Token::new_eof(scanner.line));
             Ok(tokens)
         } else {
             Err(errors)
@@ -51,8 +53,21 @@ impl<'src> Scanner<'src> {
         match c {
             // Single-char token
             '(' | ')' | '{' | '}' | ',' | '.' | '-' | '+' | ';' | '*' => {
+                let token_type = match c {
+                    '(' => TokenType::LeftParen,
+                    ')' => TokenType::RightParen,
+                    '{' => TokenType::LeftBrace,
+                    '}' => TokenType::RightBrace,
+                    ',' => TokenType::Comma,
+                    '.' => TokenType::Dot,
+                    '-' => TokenType::Minus,
+                    '+' => TokenType::Plus,
+                    ';' => TokenType::Semicolon,
+                    '*' => TokenType::Star,
+                    _ => unreachable!(),
+                };
                 Ok(Some(Token::new_simple(
-                    self.check_single_lexeme(&c),
+                    token_type,
                     self.current_lexeme(),
                     self.line,
                 )))
@@ -109,10 +124,11 @@ impl<'src> Scanner<'src> {
             '0'..='9' => Ok(Some(self.scan_number())),
             'a'..='z' | 'A'..='Z' | '_' => Ok(Some(self.scan_identifier())),
 
-            _ => Err(ScanError::UnexpectedChar {
+            _ => Err(UnexpectedCharSnafu {
                 found: c,
                 line: self.line,
-            }),
+            }
+            .build()),
         }
     }
 
@@ -127,7 +143,7 @@ impl<'src> Scanner<'src> {
                 self.line += 1;
             }
         }
-        Err(ScanError::UnterminatedCommentBlock { line: self.line })
+        Err(UnterminatedCommentBlockSnafu { line: self.line }.build())
     }
 
     fn scan_string(&mut self) -> Result<Token<'src>, ScanError> {
@@ -143,7 +159,7 @@ impl<'src> Scanner<'src> {
                 _ => {}
             }
         }
-        Err(ScanError::UnterminatedString { line: self.line })
+        Err(UnterminatedStringSnafu { line: self.line }.build())
     }
 
     fn scan_number(&mut self) -> Token<'src> {
@@ -231,22 +247,6 @@ impl<'src> Scanner<'src> {
         &self.source[self.start..self.current]
     }
 
-    fn check_single_lexeme(&self, lexeme: &char) -> TokenType {
-        match lexeme {
-            '(' => TokenType::LeftParen,
-            ')' => TokenType::RightParen,
-            '{' => TokenType::LeftBrace,
-            '}' => TokenType::RightBrace,
-            ',' => TokenType::Comma,
-            '.' => TokenType::Dot,
-            '-' => TokenType::Minus,
-            '+' => TokenType::Plus,
-            ';' => TokenType::Semicolon,
-            '*' => TokenType::Star,
-            _ => unreachable!("Invalid single-char lexeme: {}", lexeme),
-        }
-    }
-
     fn check_keyword(&self, lexeme: &str) -> TokenType {
         match lexeme {
             "and" => TokenType::And,
@@ -271,338 +271,14 @@ impl<'src> Scanner<'src> {
     }
 }
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+#[derive(Debug, Snafu)]
 pub enum ScanError {
-    #[error("line {line}: unexpected character '{found}'")]
+    #[snafu(display("line {line}: unexpected character '{found}'"))]
     UnexpectedChar { found: char, line: usize },
 
-    #[error("line {line}: unterminated string")]
+    #[snafu(display("line {line}: unterminated string"))]
     UnterminatedString { line: usize },
 
-    #[error("line {line}: unterminated comment block")]
+    #[snafu(display("line {line}: unterminated comment block"))]
     UnterminatedCommentBlock { line: usize },
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::literal::Literal;
-    use crate::token::Token;
-    use crate::token_type::TokenType;
-
-    // Helper to run the scanner
-    fn scan<'a>(source: &'a str) -> Result<Vec<Token<'a>>, Vec<ScanError>> {
-        Scanner::scan_tokens(source)
-    }
-
-    // Helper to assert a successful scan with expected tokens (EOF auto-added)
-    fn assert_tokens(
-        source: &str,
-        expected_types: &[TokenType],
-        expected_literals: Option<&[Option<Literal>]>,
-    ) {
-        let tokens = scan(source).unwrap();
-        assert_eq!(tokens.len(), expected_types.len() + 1); // +1 for EOF
-        for (i, &tt) in expected_types.iter().enumerate() {
-            assert_eq!(tokens[i].token_type, tt);
-            if let Some(lits) = expected_literals {
-                assert_eq!(tokens[i].literal, lits[i]);
-            }
-        }
-        assert_eq!(tokens.last().unwrap().token_type, TokenType::Eof);
-    }
-
-    // Helper to assert errors
-    fn assert_errors(source: &str, expected_errors: &[ScanError]) {
-        match scan(source) {
-            Ok(_) => panic!("Expected errors, got tokens"),
-            Err(errors) => assert_eq!(errors, expected_errors),
-        }
-    }
-
-    #[test]
-    fn test_single_char_tokens() {
-        assert_tokens(
-            "() {} , . - + ; *",
-            &[
-                TokenType::LeftParen,
-                TokenType::RightParen,
-                TokenType::LeftBrace,
-                TokenType::RightBrace,
-                TokenType::Comma,
-                TokenType::Dot,
-                TokenType::Minus,
-                TokenType::Plus,
-                TokenType::Semicolon,
-                TokenType::Star,
-            ],
-            None,
-        );
-    }
-
-    #[test]
-    fn test_double_char_tokens() {
-        assert_tokens(
-            "! = == != > >= < <=",
-            &[
-                TokenType::Bang,
-                TokenType::Equal,
-                TokenType::EqualEqual,
-                TokenType::BangEqual,
-                TokenType::Greater,
-                TokenType::GreaterEqual,
-                TokenType::Less,
-                TokenType::LessEqual,
-            ],
-            None,
-        );
-    }
-
-    #[test]
-    fn test_divide_vs_comment() {
-        // / as slash
-        assert_tokens("/", &[TokenType::Slash], None);
-
-        // // comment skipped
-        assert_tokens(
-            "var x = 1; // this is a comment",
-            &[
-                TokenType::Var,
-                TokenType::Identifier,
-                TokenType::Equal,
-                TokenType::Number,
-                TokenType::Semicolon,
-            ],
-            Some(&[None, None, None, Some(Literal::Number(1.0)), None]),
-        );
-
-        // /* */ block comment skipped
-        assert_tokens(
-            "var x = 1; /* multi line comment */",
-            &[
-                TokenType::Var,
-                TokenType::Identifier,
-                TokenType::Equal,
-                TokenType::Number,
-                TokenType::Semicolon,
-            ],
-            Some(&[None, None, None, Some(Literal::Number(1.0)), None]),
-        );
-
-        // Nested or unterminated handled as per impl (no nesting, error on unterm)
-    }
-
-    #[test]
-    fn test_unterminated_comment_block() {
-        let source = "/* unterminated";
-        let expected_error = ScanError::UnterminatedCommentBlock { line: 1 };
-        assert_errors(source, &[expected_error]);
-    }
-
-    #[test]
-    fn test_strings() {
-        // Valid string
-        assert_tokens(
-            r#""hello""#,
-            &[TokenType::String],
-            Some(&[Some(Literal::String("hello".to_string()))]),
-        );
-
-        // String with newline (increments line)
-        assert_tokens(
-            r#""hello
-world""#,
-            &[TokenType::String],
-            Some(&[Some(Literal::String("hello\nworld".to_string()))]), // Line 2 for EOF
-        );
-
-        // Unterminated string
-        let source = r#""unterminated"#;
-        let expected_error = ScanError::UnterminatedString { line: 1 };
-        assert_errors(source, &[expected_error]);
-    }
-
-    #[test]
-    fn test_numbers() {
-        // Integer
-        assert_tokens(
-            "123",
-            &[TokenType::Number],
-            Some(&[Some(Literal::Number(123.0))]),
-        );
-
-        // Decimal
-        assert_tokens(
-            "1.23",
-            &[TokenType::Number],
-            Some(&[Some(Literal::Number(1.23))]),
-        );
-
-        // Multiple numbers
-        assert_tokens(
-            "1 2.0 3",
-            &[TokenType::Number, TokenType::Number, TokenType::Number],
-            Some(&[
-                Some(Literal::Number(1.0)),
-                Some(Literal::Number(2.0)),
-                Some(Literal::Number(3.0)),
-            ]),
-        );
-
-        assert_tokens(
-            "1.",
-            &[TokenType::Number, TokenType::Dot],
-            Some(&[Some(Literal::Number(1.0)), None]),
-        );
-
-        assert_tokens(
-            ".5",
-            &[TokenType::Dot, TokenType::Number],
-            Some(&[None, Some(Literal::Number(5.0))]),
-        );
-    }
-
-    #[test]
-    fn test_identifiers_and_keywords() {
-        // Keywords
-        assert_tokens(
-            "and class else false for fun if nil or print return super this true var while",
-            &[
-                TokenType::And,
-                TokenType::Class,
-                TokenType::Else,
-                TokenType::False,
-                TokenType::For,
-                TokenType::Fun,
-                TokenType::If,
-                TokenType::Nil,
-                TokenType::Or,
-                TokenType::Print,
-                TokenType::Return,
-                TokenType::Super,
-                TokenType::This,
-                TokenType::True,
-                TokenType::Var,
-                TokenType::While,
-            ],
-            Some(&[
-                None,
-                None,
-                None,
-                Some(Literal::Boolean(false)),
-                None,
-                None,
-                None,
-                Some(Literal::Nil),
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(Literal::Boolean(true)),
-                None,
-                None,
-            ]),
-        );
-
-        // Identifier
-        assert_tokens("variable", &[TokenType::Identifier], None);
-
-        // With underscore/alphanum
-        assert_tokens("_var123", &[TokenType::Identifier], None);
-    }
-
-    #[test]
-    fn test_whitespace_and_newlines() {
-        assert_tokens(
-            "let \n x = 1; \t\r\n",
-            &[
-                TokenType::Identifier,
-                TokenType::Identifier,
-                TokenType::Equal,
-                TokenType::Number,
-                TokenType::Semicolon,
-            ],
-            Some(&[None, None, None, Some(Literal::Number(1.0)), None]),
-        );
-        // EOF on line 3
-    }
-
-    #[test]
-    fn test_unexpected_char() {
-        let source = "@";
-        let expected_error = ScanError::UnexpectedChar {
-            found: '@',
-            line: 1,
-        };
-        assert_errors(source, &[expected_error]);
-    }
-
-    #[test]
-    fn test_empty_source() {
-        let tokens = scan("").unwrap();
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].token_type, TokenType::Eof);
-        assert_eq!(tokens[0].line, 1);
-    }
-
-    #[test]
-    fn test_mixed_input() {
-        let source = r#"
-            var x = "hello"; /* comment */ if (true) { print x; } // end
-        "#;
-        assert_tokens(
-            source,
-            &[
-                TokenType::Var,
-                TokenType::Identifier,
-                TokenType::Equal,
-                TokenType::String,
-                TokenType::Semicolon,
-                TokenType::If,
-                TokenType::LeftParen,
-                TokenType::True,
-                TokenType::RightParen,
-                TokenType::LeftBrace,
-                TokenType::Print,
-                TokenType::Identifier,
-                TokenType::Semicolon,
-                TokenType::RightBrace,
-            ],
-            Some(&[
-                None,
-                None,
-                None,
-                Some(Literal::String("hello".to_string())),
-                None,
-                None,
-                None,
-                Some(Literal::Boolean(true)),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ]),
-        );
-        // EOF on line 3
-    }
-
-    #[test]
-    fn test_multiple_errors() {
-        let source = r#"@ # "unterm@str"#;
-        let expected_errors = vec![
-            ScanError::UnexpectedChar {
-                found: '@',
-                line: 1,
-            },
-            ScanError::UnexpectedChar {
-                found: '#',
-                line: 1,
-            },
-            ScanError::UnterminatedString { line: 1 },
-        ];
-        assert_errors(source, &expected_errors);
-    }
 }

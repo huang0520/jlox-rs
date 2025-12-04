@@ -2,9 +2,11 @@ use std::fmt::Debug;
 use std::iter::Peekable;
 
 use crate::{expr::Expr, literal::Literal, stmt::Stmt, token::Token, token_type::TokenType};
-use ParseError as E;
+use snafu::Snafu;
 
 type Result<T> = std::result::Result<T, ParseError>;
+
+const MAX_ARITY: usize = 255;
 
 #[derive(Debug)]
 pub enum REPLResult<'src> {
@@ -57,16 +59,17 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                     parser.declaration().map(|stmt| REPLResult::Stmt(*stmt))
                 }
                 _ => parser.expression().and_then(|expr| {
-                    if parser.next_if(TokenType::Semicolon)?.is_some() {
+                    if parser.next_if(TokenType::Semicolon).is_some() {
                         Ok(REPLResult::Stmt(Stmt::Expression(*expr)))
                     } else if parser.peek().token_type == TokenType::Eof {
                         Ok(REPLResult::Expr(*expr))
                     } else {
-                        Err(E::ExpectToken {
+                        ExpectTokenSnafu {
                             line: parser.peek().line,
                             expect: "';'".to_string(),
                             found: parser.peek().lexeme.to_string(),
-                        })
+                        }
+                        .fail()
                     }
                 }),
             };
@@ -101,7 +104,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         self.next_token();
 
         let name = self.expect_next(TokenType::Identifier, "'variable name'")?;
-        let initializer = if self.next_if(TokenType::Equal)?.is_some() {
+        let initializer = if self.next_if(TokenType::Equal).is_some() {
             self.expression()?
         } else {
             Box::new(Expr::Literal {
@@ -126,14 +129,17 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         if self.peek().token_type != TokenType::RightParen {
             loop {
                 let line = self.peek().line;
-                if parameters.len() >= 255 {
-                    self.errors.push(ParseError::TooMuch {
-                        line,
-                        what: "parameters",
-                    });
+                if parameters.len() >= MAX_ARITY {
+                    self.errors.push(
+                        TooMuchSnafu {
+                            line,
+                            what: "parameters",
+                        }
+                        .build(),
+                    );
                 }
                 parameters.push(self.expect_next(TokenType::Identifier, "parameter name")?);
-                if self.next_if(TokenType::Comma)?.is_none() {
+                if self.next_if(TokenType::Comma).is_none() {
                     break;
                 }
             }
@@ -142,11 +148,12 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
         let peeked = self.peek();
         if peeked.token_type != TokenType::LeftBrace {
-            return Err(ParseError::ExpectToken {
+            ExpectTokenSnafu {
                 line: peeked.line,
                 expect: format!("'{{' before {kind} body"),
                 found: peeked.lexeme.to_string(),
-            });
+            }
+            .fail()?;
         }
         let body = self.block_statement()?;
         Ok(Box::new(Stmt::Function {
@@ -223,7 +230,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         self.expect_next(TokenType::RightParen, "')' after if condition")?;
 
         let then_branch = self.statement()?;
-        let else_branch = if self.next_if(TokenType::Else)?.is_some() {
+        let else_branch = if self.next_if(TokenType::Else).is_some() {
             Some(self.statement()?)
         } else {
             None
@@ -298,7 +305,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn return_statement(&mut self) -> Result<Box<Stmt<'src>>> {
-        // Comsume 'return'
+        // Consume 'return'
         let token = self.next_token();
 
         let mut expr = Expr::Literal {
@@ -315,14 +322,14 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     }
 
     fn break_statement(&mut self) -> Result<Box<Stmt<'src>>> {
-        // Comsume 'break'
+        // Consume 'break'
         let token = self.next_token();
         self.expect_next(TokenType::Semicolon, "';' after break")?;
 
         if self.loop_depth > 0 {
             Ok(Box::new(Stmt::Break))
         } else {
-            Err(E::NotInLoop { line: token.line })
+            NotInLoopSnafu { line: token.line }.fail()
         }
     }
 
@@ -360,7 +367,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
         // If next token is '=' -> Assign value
         let line = self.peek().line;
-        if self.next_if(TokenType::Equal)?.is_some() {
+        if self.next_if(TokenType::Equal).is_some() {
             let value = self.assignment()?;
 
             if let Expr::Variable { name } = expr.as_ref() {
@@ -369,7 +376,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
                     value,
                 }))
             } else {
-                Err(E::InvalidAssignment { line })
+                InvalidAssignmentSnafu { line }.fail()
             }
         } else {
             Ok(expr)
@@ -378,7 +385,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     fn logic_or(&mut self) -> Result<Box<Expr<'src>>> {
         let mut expr = self.logic_and()?;
-        while let Some(operator) = self.next_if(TokenType::Or)? {
+        while let Some(operator) = self.next_if(TokenType::Or) {
             let right = self.logic_and()?;
             expr = Box::new(Expr::Logical {
                 left: expr,
@@ -391,7 +398,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     fn logic_and(&mut self) -> Result<Box<Expr<'src>>> {
         let mut expr = self.equality()?;
-        while let Some(operator) = self.next_if(TokenType::And)? {
+        while let Some(operator) = self.next_if(TokenType::And) {
             let right = self.equality()?;
             expr = Box::new(Expr::Logical {
                 left: expr,
@@ -443,6 +450,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     fn call(&mut self) -> Result<Box<Expr<'src>>> {
         let mut expr = self.primary()?;
 
+        // Wait to complete
         while true {
             match self.peek().token_type {
                 TokenType::LeftParen => {
@@ -475,9 +483,10 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             TokenType::Identifier => Ok(Box::new(Expr::Variable {
                 name: self.next_token(),
             })),
-            _ => Err(E::NotExpression {
+            _ => NotExpressionSnafu {
                 line: self.peek().line,
-            }),
+            }
+            .fail(),
         }
     }
 
@@ -535,14 +544,17 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         if self.peek().token_type != TokenType::RightParen {
             loop {
                 let line = self.peek().line;
-                if arguments.len() >= 255 {
-                    self.errors.push(ParseError::TooMuch {
-                        line,
-                        what: "arguments",
-                    });
+                if arguments.len() >= MAX_ARITY {
+                    self.errors.push(
+                        TooMuchSnafu {
+                            line,
+                            what: "arguments",
+                        }
+                        .build(),
+                    );
                 }
                 arguments.push(*self.expression()?);
-                if self.next_if(TokenType::Comma)?.is_none() {
+                if self.next_if(TokenType::Comma).is_none() {
                     break;
                 }
             }
@@ -566,10 +578,10 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     /// Advance iterator when match and return matched token
     /// return None if not match
-    fn next_if(&mut self, match_type: TokenType) -> Result<Option<Token<'src>>> {
+    fn next_if(&mut self, match_type: TokenType) -> Option<Token<'src>> {
         match self.tokens.peek() {
-            Some(t) if t.token_type == match_type => Ok(Some(self.next_token())),
-            Some(_) => Ok(None),
+            Some(t) if t.token_type == match_type => Some(self.next_token()),
+            Some(_) => None,
             None => unreachable!("always an EOF token"),
         }
     }
@@ -579,30 +591,31 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
     fn expect_next(&mut self, match_type: TokenType, expect_desc: &str) -> Result<Token<'src>> {
         match self.tokens.peek() {
             Some(t) if t.token_type == match_type => Ok(self.next_token()),
-            Some(found) => Err(E::ExpectToken {
+            Some(found) => ExpectTokenSnafu {
                 line: found.line,
                 expect: expect_desc.to_string(),
                 found: found.lexeme.to_string(),
-            }),
+            }
+            .fail(),
             None => unreachable!("always an EOF token"),
         }
     }
 }
 
-#[derive(Debug, thiserror::Error, Clone, PartialEq)]
+#[derive(Debug, Snafu)]
 pub enum ParseError {
-    #[error("line {line}: expected {expect}, found {found}")]
+    #[snafu(display("line {line}: expected {expect}, found {found}"))]
     ExpectToken {
         line: usize,
         expect: String,
         found: String,
     },
-    #[error("line {line}: expected expression")]
+    #[snafu(display("line {line}: expected expression"))]
     NotExpression { line: usize },
-    #[error("line {line}: invalid assignment target")]
+    #[snafu(display("line {line}: invalid assignment target"))]
     InvalidAssignment { line: usize },
-    #[error("line {line}: 'break' not in loop")]
+    #[snafu(display("line {line}: 'break' not in loop"))]
     NotInLoop { line: usize },
-    #[error("line {line}: expected number of {what} less than 255")]
+    #[snafu(display("line {line}: expected number of {what} less than {MAX_ARITY}"))]
     TooMuch { line: usize, what: &'static str },
 }
