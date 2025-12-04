@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::fmt::Display;
 use std::iter::Peekable;
 use std::str::CharIndices;
 
@@ -17,7 +19,7 @@ pub struct Scanner<'src> {
 }
 
 impl<'src> Scanner<'src> {
-    pub fn scan_tokens(source: &'src str) -> Result<Vec<Token<'src>>, Vec<ScanError>> {
+    pub fn scan_tokens(source: &'src str) -> Result<Vec<Token<'src>>, ScanErrors> {
         let mut tokens: Vec<Token<'src>> = Vec::new();
         let mut errors = Vec::new();
 
@@ -45,7 +47,7 @@ impl<'src> Scanner<'src> {
             tokens.push(Token::new_eof(scanner.line));
             Ok(tokens)
         } else {
-            Err(errors)
+            Err(ScanErrors(errors))
         }
     }
 
@@ -281,4 +283,22 @@ pub enum ScanError {
 
     #[snafu(display("line {line}: unterminated comment block"))]
     UnterminatedCommentBlock { line: usize },
+}
+
+/// Wrapper to aggregate mutiple parse error
+#[derive(Debug)]
+pub struct ScanErrors(Vec<ScanError>);
+
+impl Error for ScanErrors {}
+
+impl Display for ScanErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = self
+            .0
+            .iter()
+            .map(|e| format!("  - {e}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write!(f, "{message}")
+    }
 }

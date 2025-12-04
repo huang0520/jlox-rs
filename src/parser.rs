@@ -1,4 +1,5 @@
-use std::fmt::Debug;
+use std::error::Error;
+use std::fmt::{Debug, Display};
 use std::iter::Peekable;
 
 use crate::{expr::Expr, literal::Literal, stmt::Stmt, token::Token, token_type::TokenType};
@@ -22,7 +23,7 @@ pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
-    pub fn parse(tokens: I) -> (Vec<Stmt<'src>>, Vec<ParseError>) {
+    pub fn parse(tokens: I) -> std::result::Result<Vec<Stmt<'src>>, ParseErrors> {
         let mut statements = Vec::new();
 
         let mut parser = Self {
@@ -41,10 +42,14 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             }
         }
 
-        (statements, parser.errors)
+        if parser.errors.is_empty() {
+            Ok(statements)
+        } else {
+            Err(ParseErrors(parser.errors))
+        }
     }
 
-    pub fn parse_repl(tokens: I) -> (Vec<REPLResult<'src>>, Vec<ParseError>) {
+    pub fn parse_repl(tokens: I) -> std::result::Result<Vec<REPLResult<'src>>, ParseErrors> {
         let mut results = Vec::new();
         let mut parser = Self {
             tokens: tokens.peekable(),
@@ -83,7 +88,11 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
             }
         }
 
-        (results, parser.errors)
+        if parser.errors.is_empty() {
+            Ok(results)
+        } else {
+            Err(ParseErrors(parser.errors))
+        }
     }
 
     // ========== Declaration Grammer ==========
@@ -618,4 +627,22 @@ pub enum ParseError {
     NotInLoop { line: usize },
     #[snafu(display("line {line}: expected number of {what} less than {MAX_ARITY}"))]
     TooMuch { line: usize, what: &'static str },
+}
+
+/// Wrapper to aggregate mutiple parse error
+#[derive(Debug)]
+pub struct ParseErrors(Vec<ParseError>);
+
+impl Error for ParseErrors {}
+
+impl Display for ParseErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = self
+            .0
+            .iter()
+            .map(|e| format!("  - {e}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write!(f, "{message}")
+    }
 }

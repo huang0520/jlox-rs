@@ -2,6 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::literal::Literal;
 use EnvironmentError as E;
+use snafu::Snafu;
 
 #[derive(Debug)]
 pub struct Environment(Rc<RefCell<Env>>);
@@ -64,8 +65,8 @@ struct Env {
     values: HashMap<String, Literal>,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq)]
+#[derive(Debug, Snafu)]
 pub enum EnvironmentError {
-    #[error("undefined variable '{name}'")]
+    #[snafu(display("undefined variable '{name}'"))]
     UndefinedVariable { name: String },
 }
