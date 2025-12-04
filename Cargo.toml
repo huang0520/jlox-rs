@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+snafu = "0.8.9"
 thiserror = "2.0.17"
