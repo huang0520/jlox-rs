@@ -149,6 +149,7 @@ impl Lox {
                     name: name.lexeme.clone(),
                     parameters: parameters.iter().map(|p| p.lexeme.clone()).collect(),
                     body: self.statements_of_block(*body.clone()),
+                    closure: environment.clone(),
                 };
                 environment.define(&name.lexeme, Literal::Callable(Callable::User(function)));
                 Ok(StmtResult::Normal)

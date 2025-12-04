@@ -28,7 +28,7 @@ impl<'src> Token<'src> {
     ) -> Self {
         Token {
             token_type,
-            lexeme: lexeme.into(),
+            lexeme,
             line,
             literal,
         }
@@ -37,7 +37,7 @@ impl<'src> Token<'src> {
     pub fn new_simple(token_type: TokenType, lexeme: &'src str, line: usize) -> Self {
         Token {
             token_type,
-            lexeme: lexeme.into(),
+            lexeme,
             line,
             literal: None,
         }
@@ -46,7 +46,7 @@ impl<'src> Token<'src> {
     pub fn new_number(value: f64, lexeme: &'src str, line: usize) -> Self {
         Token {
             token_type: TokenType::Number,
-            lexeme: lexeme.into(),
+            lexeme,
             line,
             literal: Some(Literal::Number(value)),
         }
@@ -55,7 +55,7 @@ impl<'src> Token<'src> {
     pub fn new_string(value: &'src str, lexeme: &'src str, line: usize) -> Self {
         Token {
             token_type: TokenType::String,
-            lexeme: lexeme.into(),
+            lexeme,
             line,
             literal: Some(Literal::String(value.into())),
         }

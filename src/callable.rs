@@ -22,6 +22,7 @@ pub struct UserFunction {
     pub name: String,
     pub parameters: Vec<String>,
     pub body: Vec<RuntimeStmt>,
+    pub closure: Environment,
 }
 
 impl Callable {
@@ -29,10 +30,10 @@ impl Callable {
         match self {
             Self::Native { function, .. } => Ok(function(interpreter, arguments)),
             Self::User(func) => {
-                let local = Environment::new(Some(interpreter.global.clone()));
+                let local = Environment::new(Some(func.closure.clone()));
 
                 for (param, arg) in zip(&func.parameters, arguments) {
-                    local.define(&param, arg.clone());
+                    local.define(param, arg.clone());
                 }
 
                 match interpreter.evaluate_block(&func.body, &local)? {
