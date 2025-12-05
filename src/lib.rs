@@ -4,6 +4,7 @@ mod evaluation;
 mod interpreter;
 mod native_fn;
 mod parser;
+mod resolver;
 mod scanner;
 mod token;
 
