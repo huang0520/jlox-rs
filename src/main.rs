@@ -1,5 +1,6 @@
 mod callable;
 mod environment;
+mod evaluator;
 mod expr;
 mod interpreter;
 mod literal;

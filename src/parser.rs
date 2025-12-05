@@ -2,6 +2,8 @@ use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::iter::Peekable;
 
+use crate::expr::RuntimeExpr;
+use crate::stmt::RuntimeStmt;
 use crate::{expr::Expr, literal::Literal, stmt::Stmt, token::Token, token_type::TokenType};
 use snafu::Snafu;
 
@@ -10,9 +12,30 @@ type Result<T> = std::result::Result<T, ParseError>;
 const MAX_ARITY: usize = 255;
 
 #[derive(Debug)]
-pub enum REPLResult<'src> {
+pub enum ASTNode<'src> {
     Stmt(Stmt<'src>),
     Expr(Expr<'src>),
+}
+
+#[derive(Debug)]
+pub enum RuntimeASTNode {
+    Stmt(RuntimeStmt),
+    Expr(RuntimeExpr),
+}
+
+impl<'src> From<ASTNode<'src>> for RuntimeASTNode {
+    fn from(node: ASTNode<'src>) -> Self {
+        match node {
+            ASTNode::Stmt(stmt) => RuntimeASTNode::Stmt(stmt.into()),
+            ASTNode::Expr(expr) => RuntimeASTNode::Expr(expr.into()),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ParserMode {
+    File,
+    Repl,
 }
 
 #[derive(Debug)]
@@ -20,67 +43,31 @@ pub struct Parser<'src, I: Iterator<Item = Token<'src>>> {
     tokens: Peekable<I>,
     errors: Vec<ParseError>,
     loop_depth: usize,
+    mode: ParserMode,
 }
 
 impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
-    pub fn parse(tokens: I) -> std::result::Result<Vec<Stmt<'src>>, ParseErrors> {
-        let mut statements = Vec::new();
+    pub fn parse(
+        tokens: I,
+        mode: ParserMode,
+    ) -> std::result::Result<Vec<ASTNode<'src>>, ParseErrors> {
+        let mut nodes = Vec::new();
 
         let mut parser = Self {
             tokens: tokens.peekable(),
             errors: Vec::new(),
             loop_depth: 0,
+            mode,
         };
 
         while parser.peek().token_type != TokenType::Eof {
             match parser.declaration() {
-                Ok(stmt) => statements.push(*stmt),
-                Err(e) => {
-                    parser.errors.push(e);
-                    parser.sync();
-                }
-            }
-        }
-
-        if parser.errors.is_empty() {
-            Ok(statements)
-        } else {
-            Err(ParseErrors(parser.errors))
-        }
-    }
-
-    pub fn parse_repl(tokens: I) -> std::result::Result<Vec<REPLResult<'src>>, ParseErrors> {
-        let mut results = Vec::new();
-        let mut parser = Self {
-            tokens: tokens.peekable(),
-            errors: Vec::new(),
-            loop_depth: 0,
-        };
-
-        while parser.peek().token_type != TokenType::Eof {
-            let result = match parser.peek().token_type {
-                // Check is statement
-                TokenType::Var | TokenType::Print | TokenType::LeftBrace | TokenType::If => {
-                    parser.declaration().map(|stmt| REPLResult::Stmt(*stmt))
-                }
-                _ => parser.expression().and_then(|expr| {
-                    if parser.next_if(TokenType::Semicolon).is_some() {
-                        Ok(REPLResult::Stmt(Stmt::Expression(*expr)))
-                    } else if parser.peek().token_type == TokenType::Eof {
-                        Ok(REPLResult::Expr(*expr))
-                    } else {
-                        ExpectTokenSnafu {
-                            line: parser.peek().line,
-                            expect: "';'".to_string(),
-                            found: parser.peek().lexeme.to_string(),
-                        }
-                        .fail()
+                Ok(stmt) => match *stmt {
+                    Stmt::Expression(expr) if parser.peek().token_type == TokenType::Eof => {
+                        nodes.push(ASTNode::Expr(expr))
                     }
-                }),
-            };
-
-            match result {
-                Ok(r) => results.push(r),
+                    _ => nodes.push(ASTNode::Stmt(*stmt)),
+                },
                 Err(e) => {
                     parser.errors.push(e);
                     parser.sync();
@@ -89,7 +76,7 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
         }
 
         if parser.errors.is_empty() {
-            Ok(results)
+            Ok(nodes)
         } else {
             Err(ParseErrors(parser.errors))
         }
@@ -344,7 +331,11 @@ impl<'src, I: Iterator<Item = Token<'src>>> Parser<'src, I> {
 
     fn expression_statement(&mut self) -> Result<Box<Stmt<'src>>> {
         let expr = self.expression()?;
-        self.expect_next(TokenType::Semicolon, "';'")?;
+        // REPL Mode:
+        // Accept lack of semicolon in expression statement if it is last
+        if !matches!(self.mode, ParserMode::Repl) || self.peek().token_type != TokenType::Eof {
+            self.expect_next(TokenType::Semicolon, "';'")?;
+        }
         Ok(Box::new(Stmt::Expression(*expr)))
     }
 

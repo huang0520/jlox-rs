@@ -2,7 +2,7 @@ use std::{fmt::Display, iter::zip};
 
 use crate::{
     environment::Environment,
-    interpreter::{Lox, RuntimeError, StmtResult},
+    evaluator::{Evaluator, RuntimeError, StmtResult},
     literal::Literal,
     stmt::RuntimeStmt,
 };
@@ -12,7 +12,7 @@ pub enum Callable {
     Native {
         name: &'static str,
         arity: usize,
-        function: fn(&Lox, &[Literal]) -> Literal,
+        function: fn(&Evaluator, &[Literal]) -> Literal,
     },
     User(UserFunction),
 }
@@ -26,9 +26,13 @@ pub struct UserFunction {
 }
 
 impl Callable {
-    pub fn call(&self, interpreter: &Lox, arguments: &[Literal]) -> Result<Literal, RuntimeError> {
+    pub fn call(
+        &self,
+        evaluator: &Evaluator,
+        arguments: &[Literal],
+    ) -> Result<Literal, RuntimeError> {
         match self {
-            Self::Native { function, .. } => Ok(function(interpreter, arguments)),
+            Self::Native { function, .. } => Ok(function(evaluator, arguments)),
             Self::User(func) => {
                 let local = Environment::new(Some(func.closure.clone()));
 
@@ -36,7 +40,7 @@ impl Callable {
                     local.define(param, arg.clone());
                 }
 
-                match interpreter.evaluate_block(&func.body, &local)? {
+                match evaluator.evaluate_block(&func.body, &local)? {
                     StmtResult::Return(value) => Ok(value),
                     StmtResult::Normal => Ok(Literal::Nil),
                     StmtResult::Break => {
