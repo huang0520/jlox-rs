@@ -1,18 +1,17 @@
-use std::{fmt::Display, iter::zip};
+use std::fmt::Display;
+use std::iter::zip;
 
-use crate::{
-    environment::Environment,
-    evaluator::{Evaluator, RuntimeError, StmtResult},
-    literal::Literal,
-    stmt::RuntimeStmt,
-};
+use crate::ast::OwnedStmt;
+use crate::environment::Environment;
+use crate::evaluation::{self, RuntimeError, StmtResult};
+use crate::literal::Literal;
 
 #[derive(Debug, Clone)]
 pub enum Callable {
     Native {
         name: &'static str,
         arity: usize,
-        function: fn(&Evaluator, &[Literal]) -> Literal,
+        function: fn(&[Literal]) -> Literal,
     },
     User(UserFunction),
 }
@@ -21,18 +20,14 @@ pub enum Callable {
 pub struct UserFunction {
     pub name: String,
     pub parameters: Vec<String>,
-    pub body: Vec<RuntimeStmt>,
+    pub body: Vec<OwnedStmt>,
     pub closure: Environment,
 }
 
 impl Callable {
-    pub fn call(
-        &self,
-        evaluator: &Evaluator,
-        arguments: &[Literal],
-    ) -> Result<Literal, RuntimeError> {
+    pub fn call(&self, arguments: &[Literal]) -> Result<Literal, RuntimeError> {
         match self {
-            Self::Native { function, .. } => Ok(function(evaluator, arguments)),
+            Self::Native { function, .. } => Ok(function(arguments)),
             Self::User(func) => {
                 let local = Environment::new(Some(func.closure.clone()));
 
@@ -40,7 +35,7 @@ impl Callable {
                     local.define(param, arg.clone());
                 }
 
-                match evaluator.evaluate_block(&func.body, &local)? {
+                match evaluation::evaluate_block(&func.body, &local)? {
                     StmtResult::Return(value) => Ok(value),
                     StmtResult::Normal => Ok(Literal::Nil),
                     StmtResult::Break => {

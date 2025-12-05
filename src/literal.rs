@@ -1,8 +1,10 @@
+mod callable;
+
 use std::fmt::Display;
 
 use snafu::Snafu;
 
-use crate::callable::Callable;
+pub use callable::{Callable, UserFunction};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {

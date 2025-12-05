@@ -1,23 +1,9 @@
-mod callable;
-mod environment;
-mod evaluator;
-mod expr;
-mod interpreter;
-mod literal;
-mod native_fn;
-mod parser;
-mod scanner;
-mod stmt;
-mod token;
-mod token_type;
-
 use std::env;
 use std::process::{ExitCode, Termination};
 
-use interpreter::Lox;
 use snafu::{Report, Snafu};
 
-use crate::interpreter::LoxError;
+use jlox_rs::{Lox, LoxError};
 
 fn main() -> Result<(), Error> {
     let args: Vec<String> = env::args().collect();

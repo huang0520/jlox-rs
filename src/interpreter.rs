@@ -1,15 +1,17 @@
-use snafu::{Report, ResultExt, Snafu};
-
-use crate::callable::Callable;
-use crate::environment::Environment;
-use crate::evaluator::{Evaluator, RuntimeError};
-use crate::literal::Literal;
-use crate::native_fn;
-use crate::parser::{ParseErrors, Parser, ParserMode, RuntimeASTNode};
-use crate::scanner::{ScanErrors, Scanner};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
+
+use snafu::{Report, ResultExt, Snafu};
+
+use crate::ast::OwnedNode;
+use crate::environment::Environment;
+use crate::evaluation;
+use crate::evaluation::RuntimeError;
+use crate::literal::{Callable, Literal};
+use crate::native_fn;
+use crate::parser::{ParseErrors, Parser, ParserMode};
+use crate::scanner::{ScanErrors, Scanner};
 
 #[derive(Debug)]
 pub struct Lox {
@@ -59,8 +61,8 @@ impl Lox {
         let tokens = Scanner::scan_tokens(source).context(ScanSnafu)?;
         let nodes = Parser::parse(tokens.into_iter(), mode).context(ParseSnafu)?;
 
-        let runtime_nodes: Vec<RuntimeASTNode> = nodes.into_iter().map(|n| n.into()).collect();
-        Evaluator::evaluate(&runtime_nodes, &self.global).context(RuntimeSnafu)
+        let runtime_nodes: Vec<OwnedNode> = nodes.into_iter().map(|n| n.into()).collect();
+        evaluation::evaluate(&runtime_nodes, &self.global).context(RuntimeSnafu)
     }
 }
 

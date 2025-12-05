@@ -1,8 +1,18 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use snafu::Snafu;
 
 use crate::literal::Literal;
-use EnvironmentError as E;
-use snafu::Snafu;
+
+type Result<T> = std::result::Result<T, EnvironmentError>;
+
+#[derive(Debug)]
+struct Env {
+    parent: Option<Environment>,
+    values: HashMap<String, Literal>,
+}
 
 #[derive(Debug)]
 pub struct Environment(Rc<RefCell<Env>>);
@@ -19,7 +29,7 @@ impl Environment {
         self.0.borrow_mut().values.insert(name.to_string(), value);
     }
 
-    pub fn get(&self, name: &str) -> Result<Literal, E> {
+    pub fn get(&self, name: &str) -> Result<Literal> {
         let env = self.0.borrow();
         if let Some(value) = env.values.get(name) {
             return Ok(value.clone());
@@ -27,12 +37,13 @@ impl Environment {
         if let Some(parent) = &env.parent {
             return parent.get(name);
         }
-        Err(E::UndefinedVariable {
+        UndefinedVariableSnafu {
             name: name.to_string(),
-        })
+        }
+        .fail()
     }
 
-    pub fn assign(&self, name: &str, value: Literal) -> Result<(), E> {
+    pub fn assign(&self, name: &str, value: Literal) -> Result<()> {
         let mut env = self.0.borrow_mut();
         if let Some(v) = env.values.get_mut(name) {
             *v = value;
@@ -41,9 +52,10 @@ impl Environment {
         if let Some(parent) = &env.parent {
             return parent.assign(name, value);
         }
-        Err(E::UndefinedVariable {
+        UndefinedVariableSnafu {
             name: name.to_string(),
-        })
+        }
+        .fail()
     }
 }
 
@@ -57,12 +69,6 @@ impl Default for Environment {
     fn default() -> Self {
         Self::new(None)
     }
-}
-
-#[derive(Debug)]
-struct Env {
-    parent: Option<Environment>,
-    values: HashMap<String, Literal>,
 }
 
 #[derive(Debug, Snafu)]

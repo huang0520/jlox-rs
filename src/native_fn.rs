@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{evaluator::Evaluator, literal::Literal};
+use crate::literal::Literal;
 
-pub fn clock(_: &Evaluator, _: &[Literal]) -> Literal {
+pub fn clock(_: &[Literal]) -> Literal {
     Literal::Number(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

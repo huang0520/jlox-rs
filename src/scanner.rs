@@ -3,11 +3,10 @@ use std::fmt::Display;
 use std::iter::Peekable;
 use std::str::CharIndices;
 
-use crate::literal::Literal;
-use crate::token::Token;
-use crate::token_type::TokenType;
-
 use snafu::Snafu;
+
+use crate::literal::Literal;
+use crate::token::{BorrowedToken, TokenType};
 
 #[derive(Debug)]
 pub struct Scanner<'src> {
@@ -19,8 +18,8 @@ pub struct Scanner<'src> {
 }
 
 impl<'src> Scanner<'src> {
-    pub fn scan_tokens(source: &'src str) -> Result<Vec<Token<'src>>, ScanErrors> {
-        let mut tokens: Vec<Token<'src>> = Vec::new();
+    pub fn scan_tokens(source: &'src str) -> Result<Vec<BorrowedToken<'src>>, ScanErrors> {
+        let mut tokens: Vec<BorrowedToken<'src>> = Vec::new();
         let mut errors = Vec::new();
 
         let mut scanner = Scanner {
@@ -44,14 +43,14 @@ impl<'src> Scanner<'src> {
         }
 
         if errors.is_empty() {
-            tokens.push(Token::new_eof(scanner.line));
+            tokens.push(BorrowedToken::new_eof(scanner.line));
             Ok(tokens)
         } else {
             Err(ScanErrors(errors))
         }
     }
 
-    fn scan_token(&mut self, c: char) -> Result<Option<Token<'src>>, ScanError> {
+    fn scan_token(&mut self, c: char) -> Result<Option<BorrowedToken<'src>>, ScanError> {
         match c {
             // Single-char token
             '(' | ')' | '{' | '}' | ',' | '.' | '-' | '+' | ';' | '*' => {
@@ -68,7 +67,7 @@ impl<'src> Scanner<'src> {
                     '*' => TokenType::Star,
                     _ => unreachable!(),
                 };
-                Ok(Some(Token::new_simple(
+                Ok(Some(BorrowedToken::new_simple(
                     token_type,
                     self.current_lexeme(),
                     self.line,
@@ -106,7 +105,7 @@ impl<'src> Scanner<'src> {
                     }
                     Ok(None)
                 } else {
-                    Ok(Some(Token::new_simple(
+                    Ok(Some(BorrowedToken::new_simple(
                         TokenType::Slash,
                         self.current_lexeme(),
                         self.line,
@@ -148,14 +147,14 @@ impl<'src> Scanner<'src> {
         Err(UnterminatedCommentBlockSnafu { line: self.line }.build())
     }
 
-    fn scan_string(&mut self) -> Result<Token<'src>, ScanError> {
+    fn scan_string(&mut self) -> Result<BorrowedToken<'src>, ScanError> {
         while self.peek().is_some() {
             let c = self.advance().expect("next char exist");
             match c {
                 '"' => {
                     let lexeme = self.current_lexeme();
                     let value = &lexeme[1..lexeme.len() - 1];
-                    return Ok(Token::new_string(value, lexeme, self.line));
+                    return Ok(BorrowedToken::new_string(value, lexeme, self.line));
                 }
                 '\n' => self.line += 1,
                 _ => {}
@@ -164,7 +163,7 @@ impl<'src> Scanner<'src> {
         Err(UnterminatedStringSnafu { line: self.line }.build())
     }
 
-    fn scan_number(&mut self) -> Token<'src> {
+    fn scan_number(&mut self) -> BorrowedToken<'src> {
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 self.advance();
@@ -194,10 +193,10 @@ impl<'src> Scanner<'src> {
 
         let lexeme = self.current_lexeme();
         let value: f64 = lexeme.parse().expect("Should be able to parse");
-        Token::new_number(value, lexeme, self.line)
+        BorrowedToken::new_number(value, lexeme, self.line)
     }
 
-    fn scan_identifier(&mut self) -> Token<'src> {
+    fn scan_identifier(&mut self) -> BorrowedToken<'src> {
         while self
             .peek()
             .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -209,13 +208,13 @@ impl<'src> Scanner<'src> {
         let token_type = self.check_keyword(lexeme);
         match token_type {
             TokenType::True => {
-                Token::new(token_type, lexeme, self.line, Some(Literal::Boolean(true)))
+                BorrowedToken::new(token_type, lexeme, self.line, Some(Literal::Boolean(true)))
             }
             TokenType::False => {
-                Token::new(token_type, lexeme, self.line, Some(Literal::Boolean(false)))
+                BorrowedToken::new(token_type, lexeme, self.line, Some(Literal::Boolean(false)))
             }
-            TokenType::Nil => Token::new(token_type, lexeme, self.line, Some(Literal::Nil)),
-            _ => Token::new_simple(token_type, lexeme, self.line),
+            TokenType::Nil => BorrowedToken::new(token_type, lexeme, self.line, Some(Literal::Nil)),
+            _ => BorrowedToken::new_simple(token_type, lexeme, self.line),
         }
     }
 
@@ -235,14 +234,14 @@ impl<'src> Scanner<'src> {
         expected: char,
         match_type: TokenType,
         default_type: TokenType,
-    ) -> Token<'src> {
+    ) -> BorrowedToken<'src> {
         let token_type = if self.peek().is_some_and(|c| c == expected) {
             self.advance();
             match_type
         } else {
             default_type
         };
-        Token::new_simple(token_type, self.current_lexeme(), self.line)
+        BorrowedToken::new_simple(token_type, self.current_lexeme(), self.line)
     }
 
     fn current_lexeme(&self) -> &'src str {
